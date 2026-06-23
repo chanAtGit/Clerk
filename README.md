@@ -13,3 +13,6 @@ Below are the objectives that Overseer aims to achieve.
 - User interface: Python (Tkinter) *may switch to PyQt or PyQt in later stages
 - Database Management: sqlite3 for relational database, ChromaDB for vector database (RAG)
 - LLM Providers: Ollama, OpenRouter
+
+## Related repos
+This project is inspired by QiuYannnn's Local-File-Organizer - https://github.com/QiuYannnn/Local-File-Organizer.
