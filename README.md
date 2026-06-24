@@ -1,9 +1,9 @@
-# Overseer
+# Clerk
 ## Description
-Overseer is a project that aims to build a self-hosted, AI-powered file management system. It is programmed with Python and uses LLM platforms such as Ollama or OpenRouter. This project is still in preliminary stages of development.
+Clerk is a project that aims to build a self-hosted, AI-powered file management system. It is programmed with Python and uses LLM platforms such as Ollama or OpenRouter. This project is still in preliminary stages of development.
 
 ## Objectives
-Below are the objectives that Overseer aims to achieve.
+Below are the objectives that Clerk aims to achieve.
 * Understand the content of the files inside a directory and intelligently sort them into folders in a semantically relevant manner.
     - The user can control the extent of AI autonomy in this procedure, eg, the directory where it sorts the files, its permission to view the actual contents of files, etc.
 * Take account of user interactions with their files in its file organisation, for example, making commonly accessed files have a lower 'depth' in the directory structure, similar to a cache system.
