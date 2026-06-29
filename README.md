@@ -1,6 +1,6 @@
 # Clerk
 ## Description
-Clerk is a project that aims to build a self-hosted, AI-powered file management system. It is programmed with Python and uses popular open source LLMs such as DeepSeek, and embedding models like Qwen3 Embedding. 
+Clerk is a project that aims to build a self-hosted, AI-powered file management system. It is programmed with Python and uses popular open source LLMs such as Gemma 4, and embedding models like Qwen3 Embedding. 
 
 ## Objectives
 Below are the objectives that Clerk aims to achieve.
