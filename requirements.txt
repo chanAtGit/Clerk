@@ -1,0 +1,8 @@
+transformers
+sentence-transformers
+ollama
+matplotlib
+seaborn
+langchain
+langchain-text-splitters
+langchain-community
