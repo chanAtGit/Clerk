@@ -6,3 +6,4 @@ seaborn
 langchain
 langchain-text-splitters
 langchain-community
+Pillow
