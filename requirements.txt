@@ -1,9 +1,18 @@
 transformers
 sentence-transformers
-ollama
+pypdf
 matplotlib
 seaborn
 langchain
 langchain-text-splitters
-langchain-community
+unstructured
+docx2pdf
+pdf2image # need Poppler
 Pillow
+--extra-index-url https://download.pytorch.org/whl/cu130
+# Install CUDA 13 version on Linux/Windows systems with NVIDIA hardware
+torch==2.10.0+cu130; sys_platform == 'linux' or sys_platform == 'win32'
+torchvision==0.25.0+cu130; sys_platform == 'linux' or sys_platform == 'win32'
+
+# Fallback for Apple Silicon
+torch>=2.10.0; sys_platform == 'darwin'
