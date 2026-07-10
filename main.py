@@ -6,6 +6,8 @@ import os
 import platform
 import subprocess
 
+from Semantics import SemanticClustering, AutoLabelClusters, MoveFiles
+
 selected_path = None
 
 def display_files_in_dir(selected_dir: str):
