@@ -1,6 +1,6 @@
 transformers
 sentence-transformers
-pypdf
+pymupdf
 matplotlib
 seaborn
 langchain

@@ -19,19 +19,19 @@ import time
 # --- Configuration ---
 # Specify the directory containing your PDF files here
 
-POPPLER_PATH = 'C:/Users/Clinton/Desktop/summer_2026_projects/Clerk/poppler-26.02.0/Library/bin'  # Update this path to your Poppler bin directory if needed
+poppler_path = None  # Update this path to your Poppler bin directory if needed
 embedding_model = None  # Global variable to hold the embedding model instance  
 # Update this path to your Poppler bin directory
 
 def init_huggingface_and_models():
     """Initialize Hugging Face login and load the embedding model."""
-    global embedding_model, POPPLER_PATH
+    global embedding_model, poppler_path
     huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
-    # POPPLER_PATH = os.getenv("poppler_path")  # Get Poppler path from environment variable
+    poppler_path = os.getenv("POPPLER_PATH")  # Get Poppler path from environment variable
 
     if not huggingface_token:
         raise ValueError("HUGGINGFACE_TOKEN environment variable is not set.")
-    if not POPPLER_PATH:
+    if not poppler_path:
         raise ValueError("POPPLER_PATH environment variable is not set.")
 
     login(token=huggingface_token)
@@ -137,7 +137,7 @@ def generate_pdf_mean_embedding(pdf_path: str):
             return np.mean(embeddings, axis=0)
         else:
             # Convert PDF to images
-            images = convert_from_path(pdf_path, poppler_path = POPPLER_PATH)
+            images = convert_from_path(pdf_path, poppler_path = poppler_path)
             # Initialize list to store embeddings
             embeddings = []
             # Process each image
@@ -172,7 +172,7 @@ def generate_docx_mean_embedding(docx_path: str):
             # Convert docx to pdf
             convert(docx_path, temp_pdf_path)
             # Convert pdf to images
-            images = convert_from_path(temp_pdf_path, poppler_path = POPPLER_PATH)
+            images = convert_from_path(temp_pdf_path)
             # Remove temp docx
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
@@ -281,13 +281,13 @@ def AutoLabelClusters(dir_path: str, groups_final: list) -> dict:
                 else:
                     match Path(file_path).suffix:
                         case '.pdf': # processing pdf file
-                            images = convert_from_path(file_path, poppler_path = POPPLER_PATH) # convert the pdf to list of images
+                            images = convert_from_path(file_path, poppler_path = poppler_path) # convert the pdf to list of images
                             file_contents[file_name] = images
                         case '.docx': # processing word file
                             temp_pdf_path = "temp_doc.pdf"
                             # Convert docx to pdf
                             convert(file_path, temp_pdf_path)
-                            images = convert_from_path(temp_pdf_path, poppler_path = POPPLER_PATH) # convert the pdf to list of images
+                            images = convert_from_path(temp_pdf_path, poppler_path = poppler_path) # convert the pdf to list of images
                             # Remove temp docx
                             if os.path.exists(temp_pdf_path):
                                 os.remove(temp_pdf_path)
