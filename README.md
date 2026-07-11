@@ -16,3 +16,9 @@ Below are the objectives that Clerk aims to achieve.
 
 ## Related repos
 This project is inspired by QiuYannnn's Local-File-Organizer - https://github.com/QiuYannnn/Local-File-Organizer.
+
+## How to run
+```
+pip install -r requirements.txt
+python main.py
+```

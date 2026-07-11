@@ -2,7 +2,6 @@ transformers
 sentence-transformers
 pymupdf
 matplotlib
-seaborn
 langchain
 langchain-text-splitters
 unstructured
