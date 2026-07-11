@@ -6,10 +6,11 @@ import os
 import platform
 import subprocess
 
-from Semantics import SemanticClustering, AutoLabelClusters, MoveFiles
+from Semantics import init_huggingface_and_models, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
 
+## File and Directory Functions
 def display_files_in_dir(selected_dir: str):
         # Clear any existing entries in the Listbox
         num_of_files_label.config(text=f"Number of files: {len(os.listdir(selected_dir))}")
@@ -131,97 +132,114 @@ def on_select_file(event):
         else:  # Linux
             subprocess.Popen(["xdg-open", filename])
 
+## User Control Functions
+
+def semantic_file_sort():
+    # Get the currently viewed directory from the entry box
+    current_dir = path_entry.get()
+    clusters = SemanticClustering(current_dir)
+    clusters = AutoLabelClusters(current_dir, clusters)
+    MoveFiles(current_dir, clusters)
+    display_files_in_dir(current_dir) # update current display to reflect the changes made by the semantic sort
+
 ## GUI ##
 # Create main application window
-root = tk.Tk()
-root.title("Clerk")
-root.geometry("900x600")  # Width x Height in pixels
+if __name__ == "__main__":
+    init_huggingface_and_models()
+    root = tk.Tk()
+    root.title("Clerk")
+    root.geometry("900x600")  # Width x Height in pixels
 
-# Configure main window grid weights
-root.rowconfigure(0, weight=0)  # Label row
-root.rowconfigure(1, weight=1)  # Directory frame and user control frame row
-root.rowconfigure(2, weight=0)  # Quit button row
-root.columnconfigure(0, weight=1) # Directory frame
-root.columnconfigure(1, weight=1) # user control frame
+    # Configure main window grid weights
+    root.rowconfigure(0, weight=0)  # Label row
+    root.rowconfigure(1, weight=1)  # Directory frame and user control frame row
+    root.rowconfigure(2, weight=0)  # Quit button row
+    root.columnconfigure(0, weight=1) # Directory frame
+    root.columnconfigure(1, weight=1) # user control frame
 
-## Load Image Assets ##
-prev_icon = Image.open("assets/prev_icon.png")
-next_icon = Image.open("assets/next_icon.png")
-prev_icon = prev_icon.resize((15, 15))
-next_icon = next_icon.resize((15, 15))
-prev_icon = ImageTk.PhotoImage(prev_icon) #make image into a Tkinter-compatible object
-next_icon = ImageTk.PhotoImage(next_icon) 
+    ## Load Image Assets ##
+    prev_icon = Image.open("assets/prev_icon.png")
+    next_icon = Image.open("assets/next_icon.png")
+    prev_icon = prev_icon.resize((15, 15))
+    next_icon = next_icon.resize((15, 15))
+    prev_icon = ImageTk.PhotoImage(prev_icon) #make image into a Tkinter-compatible object
+    next_icon = ImageTk.PhotoImage(next_icon) 
 
-# Application Title
-label = tk.Label(root, text="Clerk - AI Powered File System", font=("Arial", 16))
-label.grid(row=0, column=0, columnspan=2) # center label over the two columns
+    # Application Title
+    label = tk.Label(root, text="Clerk - AI Powered File System", font=("Arial", 16))
+    label.grid(row=0, column=0, columnspan=2) # center label over the two columns
 
-# COMPONENT 1: DISPLAY PATH DIRECTORY AND ITS FILES
-# Create a frame
-directory_frame = ttk.Frame(root, width=450, relief="ridge", padding=10)
-directory_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+    # COMPONENT 1: DISPLAY PATH DIRECTORY AND ITS FILES
+    # Create a frame
+    directory_frame = ttk.Frame(root, width=450, relief="ridge", padding=10)
+    directory_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
-# Configure the frame's grid to allow internal widgets to expand
-directory_frame.rowconfigure(0, weight=0)
-directory_frame.rowconfigure(1, weight=1)
-directory_frame.columnconfigure(0, weight=0)
-directory_frame.columnconfigure(1, weight=0)
-directory_frame.columnconfigure(2, weight=1)
-directory_frame.columnconfigure(3, weight=0)
+    # Configure the frame's grid to allow internal widgets to expand
+    directory_frame.rowconfigure(0, weight=0)
+    directory_frame.rowconfigure(1, weight=1)
+    directory_frame.columnconfigure(0, weight=0)
+    directory_frame.columnconfigure(1, weight=0)
+    directory_frame.columnconfigure(2, weight=1)
+    directory_frame.columnconfigure(3, weight=0)
 
-# COMPONENT 1.1: DIRECTORY SEARCH BAR
-# Previous and Next Directory Buttons
-prev_btn = ttk.Button(
-    directory_frame, image=prev_icon, command=prev_folder
-)
-prev_btn.grid(row=0, column=0)
-next_btn = ttk.Button(
-    directory_frame, image=next_icon, command=next_folder
-)
-next_btn.grid(row=0, column=1)
+    # COMPONENT 1.1: DIRECTORY SEARCH BAR
+    # Previous and Next Directory Buttons
+    prev_btn = ttk.Button(
+        directory_frame, image=prev_icon, command=prev_folder
+    )
+    prev_btn.grid(row=0, column=0)
+    next_btn = ttk.Button(
+        directory_frame, image=next_icon, command=next_folder
+    )
+    next_btn.grid(row=0, column=1)
 
-# Path Input Display
-path_entry = ttk.Entry(directory_frame, width=50)
-path_entry.grid(row=0, column=2, sticky="ew")
+    # Path Input Display
+    path_entry = ttk.Entry(directory_frame, width=50)
+    path_entry.grid(row=0, column=2, sticky="ew")
 
-# Browse Button
-browse_btn = ttk.Button(
-    directory_frame, text="Browse...", command=browse_folder
-)
-browse_btn.grid(row=0, column=3)
+    # Browse Button
+    browse_btn = ttk.Button(
+        directory_frame, text="Browse...", command=browse_folder
+    )
+    browse_btn.grid(row=0, column=3)
 
-# COMPONENT 1.2: FILE LIST
-list_frame = ttk.Frame(directory_frame, width=450)
-list_frame.grid(row=1, column=0, columnspan=4, sticky='nsew', pady=10)
+    # COMPONENT 1.2: FILE LIST
+    list_frame = ttk.Frame(directory_frame, width=450)
+    list_frame.grid(row=1, column=0, columnspan=4, sticky='nsew', pady=10)
 
-num_of_files_label = ttk.Label(list_frame, text="")
-num_of_files_label.pack(anchor='w')
+    num_of_files_label = ttk.Label(list_frame, text="")
+    num_of_files_label.pack(anchor='w')
 
-scrollbar = tk.Scrollbar(list_frame)
-scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    scrollbar = tk.Scrollbar(list_frame)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# Listbox to display filenames
-file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Arial",10))
-file_listbox.insert(tk.END, "No files here") # initialise with a default message
-file_listbox.bind('<Double-Button-1>', on_select_file) # Bind the selection event 
-file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    # Listbox to display filenames
+    file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Arial",10))
+    file_listbox.insert(tk.END, "No files here") # initialise with a default message
+    file_listbox.bind('<Double-Button-1>', on_select_file) # Bind the selection event 
+    file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-# Link scrollbar to listbox
-scrollbar.config(command=file_listbox.yview)
+    # Link scrollbar to listbox
+    scrollbar.config(command=file_listbox.yview)
 
 
-# COMPONENT 2: USER CONTROLS
-control_frame = ttk.Frame(root, width=450, relief="ridge", padding=10)
-control_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
+    # COMPONENT 2: USER CONTROLS
+    control_frame = ttk.Frame(root, width=450, relief="ridge", padding=10)
+    control_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
 
-# Configure the frame's grid to allow internal widgets to expand
-# directory_frame.rowconfigure(0, weight=0)
-# directory_frame.columnconfigure(0, weight=1)
+    # Configure the frame's grid to allow internal widgets to expand
+    # directory_frame.rowconfigure(0, weight=0)
+    # directory_frame.columnconfigure(0, weight=1)
 
-button = tk.Button(
-    control_frame, text="Quit", command=root.destroy, width=5, height=1, font=("Arial", 12)
-)
-button.pack()
+    button = tk.Button(
+        control_frame, text="Sort", command=semantic_file_sort, width=5, height=1, font=("Arial", 12)
+    )
+    button.pack()
 
-# Start the infinite event loop
-root.mainloop()
+    button = tk.Button(
+        control_frame, text="Quit", command=root.destroy, width=5, height=1, font=("Arial", 12)
+    )
+    button.pack()
+
+    # Start the infinite event loop
+    root.mainloop()

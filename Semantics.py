@@ -18,12 +18,24 @@ import time
 
 # --- Configuration ---
 # Specify the directory containing your PDF files here
-TARGET_DIR = "files" # e.g., "documents/" or continuous path
-huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
-login(token=huggingface_token)
-embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
-POPPLER_PATH = "C:/Users/Clinton/Desktop/summer_2026_projects/Clerk/poppler-26.02.0/Library/bin"  
+
+POPPLER_PATH = 'C:/Users/Clinton/Desktop/summer_2026_projects/Clerk/poppler-26.02.0/Library/bin'  # Update this path to your Poppler bin directory if needed
+embedding_model = None  # Global variable to hold the embedding model instance  
 # Update this path to your Poppler bin directory
+
+def init_huggingface_and_models():
+    """Initialize Hugging Face login and load the embedding model."""
+    global embedding_model, POPPLER_PATH
+    huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
+    # POPPLER_PATH = os.getenv("poppler_path")  # Get Poppler path from environment variable
+
+    if not huggingface_token:
+        raise ValueError("HUGGINGFACE_TOKEN environment variable is not set.")
+    if not POPPLER_PATH:
+        raise ValueError("POPPLER_PATH environment variable is not set.")
+
+    login(token=huggingface_token)
+    embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
 
 # MODEL_ID = "google/gemma-4-E2B-it"
 # processor = AutoProcessor.from_pretrained(MODEL_ID)
@@ -198,6 +210,8 @@ def get_file_mean_embeddings(dir_path: str, files_list: list) -> dict:
                 mean_embedding = generate_pdf_mean_embedding(file_path)
             case '.docx': # processing word file
                 mean_embedding = generate_docx_mean_embedding(file_path)
+            case '.png' | '.jpg' | '.jpeg' | '.bmp' | '.tiff': # processing image file
+                mean_embedding = embedding_model.encode(Image.open(file_path), convert_to_numpy=True)
         
         if mean_embedding is not None: # mean_embedding is generated
             # Append to the dictionary
@@ -273,7 +287,7 @@ def AutoLabelClusters(dir_path: str, groups_final: list) -> dict:
                             temp_pdf_path = "temp_doc.pdf"
                             # Convert docx to pdf
                             convert(file_path, temp_pdf_path)
-                            images = convert_from_path(file_path, poppler_path = POPPLER_PATH) # convert the pdf to list of images
+                            images = convert_from_path(temp_pdf_path, poppler_path = POPPLER_PATH) # convert the pdf to list of images
                             # Remove temp docx
                             if os.path.exists(temp_pdf_path):
                                 os.remove(temp_pdf_path)
@@ -365,7 +379,7 @@ def MoveFiles(dir_path: str, groups_final: dict):
         return
     # Create directories for each cluster and move files into them
     for lab, items in groups_final.items():
-        if not lab or not items or len(items)==1:
+        if not lab or not items or len(items) == 1:
             continue
         cluster_dir = os.path.join(dir_path, lab)
         
