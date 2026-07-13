@@ -6,7 +6,7 @@ import os
 import platform
 import subprocess
 
-from Semantics import init_huggingface_and_models, SemanticClustering, AutoLabelClusters, MoveFiles
+from Semantics import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
 
@@ -100,6 +100,11 @@ def next_folder():
         # Update the UI listbox with the files inside this next folder
         display_files_in_dir(next_step)
 
+def refresh_folder():
+    # Get the currently viewed directory from the entry box
+    current_dir = path_entry.get()
+    display_files_in_dir(current_dir)
+
 def on_select_file(event):
     # Get the selected file from the Listbox
     selected_indices = file_listbox.curselection()
@@ -145,7 +150,7 @@ def semantic_file_sort():
 ## GUI ##
 # Create main application window
 if __name__ == "__main__":
-    init_huggingface_and_models()
+    semantics_init()
     root = tk.Tk()
     root.title("Clerk")
     root.geometry("900x600")  # Width x Height in pixels
@@ -160,10 +165,13 @@ if __name__ == "__main__":
     ## Load Image Assets ##
     prev_icon = Image.open("assets/prev_icon.png")
     next_icon = Image.open("assets/next_icon.png")
+    reload_icon = Image.open("assets/reload_icon.png")
     prev_icon = prev_icon.resize((15, 15))
     next_icon = next_icon.resize((15, 15))
+    reload_icon = reload_icon.resize((15, 15))
     prev_icon = ImageTk.PhotoImage(prev_icon) #make image into a Tkinter-compatible object
     next_icon = ImageTk.PhotoImage(next_icon) 
+    reload_icon = ImageTk.PhotoImage(reload_icon) 
 
     # Application Title
     label = tk.Label(root, text="Clerk - AI Powered File System", font=("Arial", 16))
@@ -181,6 +189,7 @@ if __name__ == "__main__":
     directory_frame.columnconfigure(1, weight=0)
     directory_frame.columnconfigure(2, weight=1)
     directory_frame.columnconfigure(3, weight=0)
+    directory_frame.columnconfigure(4, weight=0)
 
     # COMPONENT 1.1: DIRECTORY SEARCH BAR
     # Previous and Next Directory Buttons
@@ -188,6 +197,7 @@ if __name__ == "__main__":
         directory_frame, image=prev_icon, command=prev_folder
     )
     prev_btn.grid(row=0, column=0)
+    
     next_btn = ttk.Button(
         directory_frame, image=next_icon, command=next_folder
     )
@@ -197,11 +207,17 @@ if __name__ == "__main__":
     path_entry = ttk.Entry(directory_frame, width=50)
     path_entry.grid(row=0, column=2, sticky="ew")
 
+    # Refresh Button
+    refresh_btn = ttk.Button(
+        directory_frame, image=reload_icon, command=refresh_folder
+    )
+    refresh_btn.grid(row=0, column=3)
+
     # Browse Button
     browse_btn = ttk.Button(
         directory_frame, text="Browse...", command=browse_folder
     )
-    browse_btn.grid(row=0, column=3)
+    browse_btn.grid(row=0, column=4)
 
     # COMPONENT 1.2: FILE LIST
     list_frame = ttk.Frame(directory_frame, width=450)

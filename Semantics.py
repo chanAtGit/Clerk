@@ -6,7 +6,8 @@ from transformers import AutoProcessor, AutoModelForMultimodalLM
 from sentence_transformers import SentenceTransformer
 import ollama
 from sklearn.metrics import silhouette_score
-from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.cluster import AgglomerativeClustering
 import numpy as np
 import re, unicodedata, collections
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -23,7 +24,7 @@ poppler_path = None  # Update this path to your Poppler bin directory if needed
 embedding_model = None  # Global variable to hold the embedding model instance  
 # Update this path to your Poppler bin directory
 
-def init_huggingface_and_models():
+def semantics_init():
     """Initialize Hugging Face login and load the embedding model."""
     global embedding_model, poppler_path
     huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
@@ -88,17 +89,18 @@ def clean_text(text):
     return text
 
 def optimal_kmeans_clustering(data:list):
-    data = np.array(data)
-    centroid_values= np.arange(1, int(data.shape[0] / 2))
+    pca = PCA(n_components=3, random_state=42)
+    reduced = pca.fit_transform(np.array(data))
+    cluster_values= np.arange(1, int(reduced.shape[0] / 2))
     # Clinton's note: why is the maximum possible number of centroids half of the number of data points? 
     # because it assumes that a directory should contain at least 2 files
-    best_centroid = None
+    best_clusters = None
     best_score = -1
     best_labels = None
 
-    for centroid in centroid_values:
-        kmeans = KMeans(n_clusters=int(centroid), random_state=42)
-        labels = kmeans.fit_predict(data)
+    for cluster in cluster_values:
+        model = AgglomerativeClustering(n_clusters=cluster, metric='cosine', linkage='average')
+        labels = model.fit_predict(reduced)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         #print(f"Trying centroid={centroid:.3f}: Found {n_clusters} clusters.")
         
@@ -108,16 +110,16 @@ def optimal_kmeans_clustering(data:list):
             
             # Ensure we still have multiple clusters after removing noise
             if len(set(search_labels)) > 1:
-                score = silhouette_score(data[core_samples_mask], search_labels, metric="cosine")
+                score = silhouette_score(reduced[core_samples_mask], search_labels, metric="cosine")
                 #print(f"Silhouette Score (excluding noise): {score:.3f}") 
                 
                 if score > best_score: 
                     best_score = score 
-                    best_centroid = centroid
+                    best_clusters = cluster
                     best_labels = labels
 
-    print(f"Best clusters: {best_centroid}, score: {best_score}")
-    return best_centroid, best_labels
+    print(f"Best clusters: {best_clusters}, score: {best_score}")
+    return best_clusters, best_labels
 
 def generate_pdf_mean_embedding(pdf_path: str):
     print(f'Processing PDF: {pdf_path}')

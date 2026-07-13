@@ -1,5 +1,6 @@
 transformers
 sentence-transformers
+scikit-learn
 pymupdf
 matplotlib
 langchain
