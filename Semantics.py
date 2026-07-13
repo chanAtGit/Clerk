@@ -41,7 +41,6 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 def clean_text(text):
-    """Advanced text cleaning pipeline for better clustering performance"""
     text = unicodedata.normalize('NFKD', text)
     text = text.lower()
     text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
@@ -139,7 +138,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None):
         if status_callback: status_callback(msg)
         return None
 
-def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=None, progress_callback=None) -> dict:
+def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     if not files_list:
         return None
 
@@ -147,6 +146,9 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
     total_files = len(files_list)
 
     for idx, file_name in enumerate(files_list):
+        if check_cancel and check_cancel():
+            raise InterruptedError()
+
         file_path = os.path.join(dir_path, file_name)
         if not os.path.isfile(file_path):
             continue
@@ -168,7 +170,6 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
             mean_embeddings[file_name] = mean_embedding
         
         if progress_callback:
-            # Scale progress across the first 50% of total job progress
             progress_callback(int(((idx + 1) / total_files) * 50))
 
     if len(mean_embeddings) == 0:
@@ -176,16 +177,18 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
     
     return mean_embeddings
 
-def SemanticClustering(dir_path: str, status_callback=None, progress_callback=None) -> dict:
+def SemanticClustering(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+    if check_cancel and check_cancel(): raise InterruptedError()
     files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
     if not files_list:
         if status_callback: status_callback("No files found to cluster.")
         return None
     
-    file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback)
+    file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
     if not file_embeddings_dict:
         return None
     
+    if check_cancel and check_cancel(): raise InterruptedError()
     file_names = list(file_embeddings_dict.keys())
     mean_embeddings = list(file_embeddings_dict.values())
 
@@ -198,7 +201,7 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
     groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
     return groups_final 
 
-def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, progress_callback=None) -> dict:
+def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     if not groups_final:
         return {}
     
@@ -211,6 +214,8 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
         if str(lab) == "-1":
             continue
         for file_name in items:
+            if check_cancel and check_cancel():
+                raise InterruptedError()
             file_path = os.path.join(dir_path, file_name)
             try:
                 match Path(file_path).suffix.lower():
@@ -235,6 +240,9 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
     total_groups = len(groups_final)
 
     for idx, (lab, items) in enumerate(groups_final):
+        if check_cancel and check_cancel(): 
+            raise InterruptedError()
+            
         if str(lab) == "-1":
             labeled_groups["Misc"] = items
             continue
@@ -254,6 +262,9 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
                 cluster_context += f"Content Sample: {file_contents.get(file_name, '')}\n\n"
             else:
                 for page in file_contents[file_name]:
+                    if check_cancel and check_cancel():
+                        if os.path.exists(temp_img_dir): shutil.rmtree(temp_img_dir)
+                        raise InterruptedError()
                     if not os.path.exists(temp_img_dir):
                         os.mkdir(temp_img_dir)
                     image_name = f"{img_index}.png"
@@ -289,23 +300,24 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
             shutil.rmtree(temp_img_dir)
             
         if progress_callback:
-            # Scale across progress range 50% to 90%
             progress_callback(int(50 + ((idx + 1) / total_groups) * 40))
 
     return labeled_groups
 
-def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_callback=None):
+def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_callback=None, check_cancel=None):
     if not groups_final:
         return
     
     total_labels = len(groups_final)
     for idx, (lab, items) in enumerate(groups_final.items()):
+        if check_cancel and check_cancel(): raise InterruptedError()
         if not lab or not items or len(items) == 1:
             continue
         cluster_dir = os.path.join(dir_path, lab)
         os.makedirs(cluster_dir, exist_ok=True)
         
         for item in items:
+            if check_cancel and check_cancel(): raise InterruptedError()
             src_path = os.path.join(dir_path, item)
             dest_path = os.path.join(cluster_dir, item)
             try:
@@ -317,5 +329,4 @@ def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_
                 if status_callback: status_callback(msg)
                 
         if progress_callback:
-            # Scale remaining final progress from 90% to 100%
             progress_callback(int(90 + ((idx + 1) / total_labels) * 10))

@@ -6,13 +6,13 @@ from PIL import Image, ImageTk
 import os
 import platform
 import subprocess
-import threading # Use threading instead of multiprocessing for shared UI memory spaces
+import threading 
 
 from Semantics import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
-worker = None # Holds the background worker thread reference
-is_cancelled = False # Thread-safe flag to handle job stopping
+worker = None 
+is_cancelled = False 
 
 ## File and Directory Functions
 def display_files_in_dir(selected_dir: str):
@@ -101,52 +101,54 @@ def on_select_file(event):
 
 ## Thread Safe Gui State Changes ##
 def update_status_console(text):
-    """Safely updates text directly inside our tracking label."""
-    # Ensure UI changes are handled safely on the main loop
     root.after(0, lambda: status_text.config(text=text))
 
 def update_progress_bar(val):
-    """Updates progress bar values synchronously."""
     root.after(0, lambda: progress_bar.config(value=val))
 
+def check_cancel_status():
+    global is_cancelled
+    return is_cancelled
+
 def sorting_thread_worker(current_dir):
-    """Background execution runtime handling backend pipeline data flow."""
     global is_cancelled
     try:
         # Step 1: Semantic Clustering
-        if is_cancelled: return
         clusters = SemanticClustering(
             current_dir, 
             status_callback=update_status_console, 
-            progress_callback=update_progress_bar
+            progress_callback=update_progress_bar,
+            check_cancel=check_cancel_status
         )
         
         # Step 2: Dynamic Auto-Labelling
-        if is_cancelled: return
         if clusters:
             labeled_clusters = AutoLabelClusters(
                 current_dir, clusters, 
                 status_callback=update_status_console, 
-                progress_callback=update_progress_bar
+                progress_callback=update_progress_bar,
+                check_cancel=check_cancel_status
             )
             
             # Step 3: Organise Files
-            if is_cancelled: return
             MoveFiles(
                 current_dir, labeled_clusters, 
                 status_callback=update_status_console, 
-                progress_callback=update_progress_bar
+                progress_callback=update_progress_bar,
+                check_cancel=check_cancel_status
             )
-            if not is_cancelled:
-                update_status_console("Sorting job completed successfully!")
+            update_status_console("Sorting job completed successfully!")
         else:
-            update_status_console("No clusters generated. Process aborted.")
+            if not is_cancelled:
+                update_status_console("No clusters generated. Process aborted.")
             
+    except InterruptedError:
+        update_status_console("Sorting job cleanly stopped by user.")
     except Exception as e:
         update_status_console(f"Execution Error: {str(e)}")
     finally:
-        # Reset elements cleanly on complete
-        update_progress_bar(100)
+        # Reset elements cleanly on complete or cancel
+        update_progress_bar(100 if not is_cancelled else 0)
         sort_btn.config(state=tk.NORMAL)
         cancel_btn.config(state=tk.DISABLED)
         root.after(0, lambda: display_files_in_dir(current_dir))
@@ -160,27 +162,22 @@ def semantic_file_sort():
     global is_cancelled
     is_cancelled = False
 
-    # Disable button interaction, setup progress display reset targets
     sort_btn.config(state=tk.DISABLED)
     cancel_btn.config(state=tk.NORMAL)
     update_progress_bar(0)
     update_status_console("Initializing semantic indexing system...")
 
-    # Fire off background worker via standard Threading
     global worker
     worker = threading.Thread(target=sorting_thread_worker, args=(current_dir,), daemon=True)
     worker.start()
 
 def cancel_file_sort():
-    # Signal the running thread worker to drop sequence checkpoints
     global is_cancelled
     is_cancelled = True
-    update_status_console("Sorting job cancelled by user.")
-    sort_btn.config(state=tk.NORMAL)
+    update_status_console("Cancellation requested... Stopping execution.")
     cancel_btn.config(state=tk.DISABLED)
 
 def auto_wrap(event):
-    # Adjust wrap length to match the current width of the label widget
     event.widget.config(wraplength=event.width)
 
 ## GUI Layout ##
@@ -232,12 +229,11 @@ if __name__ == "__main__":
     # COMPONENT 2: RIGHT FRAME (STATUS AND USER CONTROLS)
     control_frame = ttk.Frame(root, relief="ridge", padding=10)
     control_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
-    control_frame.grid_propagate(False) # fix the frame size to prevent resizing
+    control_frame.grid_propagate(False)
     control_frame.rowconfigure(0, weight=0)
     control_frame.rowconfigure(1, weight=0)
     control_frame.columnconfigure(0, weight=1)
 
-    # Action Buttons
     btn_panel = ttk.Frame(control_frame)
     btn_panel.grid(row=0, column=0, sticky="ew", pady=5)
     sort_btn = tk.Button(btn_panel, text="Sort", command=semantic_file_sort, width=8, font=("Arial", 11))
@@ -245,7 +241,6 @@ if __name__ == "__main__":
     cancel_btn = tk.Button(btn_panel, text="Cancel", command=cancel_file_sort, width=8, font=("Arial", 11), state=tk.DISABLED)
     cancel_btn.pack(side=tk.RIGHT)
 
-    # Progress Indicator Layout
     progress_label = ttk.Label(control_frame, text="Sorting Progress Indicator:")
     progress_label.grid(row=2, column=0, sticky="w", pady=(10, 2))
 
@@ -254,7 +249,6 @@ if __name__ == "__main__":
 
     status_text = ttk.Label(control_frame, text="", font=("Consolas", 9))
     status_text.grid(row=4, column=0, sticky="ew",pady=5)
-    # Bind the resize configuration event to the wrapper function
     status_text.bind("<Configure>", auto_wrap)
 
     root.mainloop()
