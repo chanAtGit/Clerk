@@ -151,7 +151,7 @@ def sorting_thread_worker(current_dir):
         update_progress_bar(100 if not is_cancelled else 0)
         sort_btn.config(state=tk.NORMAL)
         cancel_btn.config(state=tk.DISABLED)
-        root.after(0, lambda: display_files_in_dir(current_dir))
+        display_files_in_dir(current_dir) # update display after sorting
 
 def semantic_file_sort():
     current_dir = path_entry.get()
@@ -234,21 +234,21 @@ if __name__ == "__main__":
     control_frame.rowconfigure(1, weight=0)
     control_frame.columnconfigure(0, weight=1)
 
+    progress_label = ttk.Label(control_frame, text="Sorting Progress Indicator:")
+    progress_label.grid(row=0, column=0, sticky="w", pady=(10, 2))
+
+    progress_bar = ttk.Progressbar(control_frame, orient="horizontal", mode="determinate")
+    progress_bar.grid(row=1, column=0, sticky="ew", pady=5)
+
+    status_text = ttk.Label(control_frame, text="", font=("Consolas", 9))
+    status_text.grid(row=2, column=0, sticky="ew",pady=5)
+    status_text.bind("<Configure>", auto_wrap)
+
     btn_panel = ttk.Frame(control_frame)
-    btn_panel.grid(row=0, column=0, sticky="ew", pady=5)
+    btn_panel.grid(row=3, column=0, sticky="ew", pady=5)
     sort_btn = tk.Button(btn_panel, text="Sort", command=semantic_file_sort, width=8, font=("Arial", 11))
     sort_btn.pack(side=tk.LEFT)
     cancel_btn = tk.Button(btn_panel, text="Cancel", command=cancel_file_sort, width=8, font=("Arial", 11), state=tk.DISABLED)
     cancel_btn.pack(side=tk.RIGHT)
-
-    progress_label = ttk.Label(control_frame, text="Sorting Progress Indicator:")
-    progress_label.grid(row=2, column=0, sticky="w", pady=(10, 2))
-
-    progress_bar = ttk.Progressbar(control_frame, orient="horizontal", mode="determinate")
-    progress_bar.grid(row=3, column=0, sticky="ew", pady=5)
-
-    status_text = ttk.Label(control_frame, text="", font=("Consolas", 9))
-    status_text.grid(row=4, column=0, sticky="ew",pady=5)
-    status_text.bind("<Configure>", auto_wrap)
 
     root.mainloop()

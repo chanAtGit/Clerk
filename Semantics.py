@@ -1,10 +1,11 @@
 import os
 import shutil
+import torch
+import gc
 from pathlib import Path
 from huggingface_hub import login
 from transformers import AutoProcessor, AutoModelForMultimodalLM
 from sentence_transformers import SentenceTransformer
-import ollama
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import AgglomerativeClustering
@@ -18,12 +19,51 @@ from pdf2image import convert_from_path
 import time
 
 # --- Configuration ---
-poppler_path = None  
+poppler_path = None
+processor = None
+llm = None  
 embedding_model = None  
 
+def clear_vram():
+    """Forces Python garbage collection and clears PyTorch CUDA cache."""
+    gc.collect()
+    torch.cuda.empty_cache()
+
+def load_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        print("Loading embedding model into VRAM...")
+        embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
+
+def unload_embedding_model():
+    global embedding_model
+    if embedding_model is not None:
+        print("Unloading embedding model from VRAM...")
+        del embedding_model
+        embedding_model = None
+        clear_vram()
+
+def load_llm():
+    global processor, llm
+    if llm is None:
+        print("Loading LLM into VRAM...")
+        model_id = "google/gemma-4-E2B-it"
+        processor = AutoProcessor.from_pretrained(model_id)
+        llm = AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda")
+
+def unload_llm():
+    global processor, llm
+    if llm is not None:
+        print("Unloading LLM from VRAM...")
+        del llm
+        del processor
+        llm = None
+        processor = None
+        clear_vram()
+
 def semantics_init():
-    """Initialize Hugging Face login and load the embedding model."""
-    global embedding_model, poppler_path
+    """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
+    global poppler_path
     huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
     poppler_path = os.getenv("POPPLER_PATH")  
 
@@ -33,7 +73,6 @@ def semantics_init():
         raise ValueError("POPPLER_PATH environment variable is not set.")
 
     login(token=huggingface_token)
-    embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1500,
@@ -184,125 +223,167 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
         if status_callback: status_callback("No files found to cluster.")
         return None
     
-    file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
-    if not file_embeddings_dict:
-        return None
+    load_embedding_model()
     
-    if check_cancel and check_cancel(): raise InterruptedError()
-    file_names = list(file_embeddings_dict.keys())
-    mean_embeddings = list(file_embeddings_dict.values())
+    try:
+        file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        if not file_embeddings_dict:
+            return None
+        
+        if check_cancel and check_cancel(): raise InterruptedError()
+        file_names = list(file_embeddings_dict.keys())
+        mean_embeddings = list(file_embeddings_dict.values())
 
-    best_centroids, labels_final = optimal_kmeans_clustering(mean_embeddings, status_callback)
+        best_centroids, labels_final = optimal_kmeans_clustering(mean_embeddings, status_callback)
 
-    groups_final = collections.defaultdict(list)
-    for i, lab in enumerate(labels_final):
-        groups_final[str(lab)].append(file_names[i])
+        groups_final = collections.defaultdict(list)
+        for i, lab in enumerate(labels_final):
+            groups_final[str(lab)].append(file_names[i])
 
-    groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
-    return groups_final 
+        groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
+        return groups_final 
+    finally:
+        # Guarantee the embedding model unloads even if user cancels
+        unload_embedding_model()
 
 def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+    global processor, llm
     if not groups_final:
         return {}
     
     msg = "Analyzing clusters via LLM content descriptions..."
     print(msg)
     if status_callback: status_callback(msg)
+    
+    load_llm()
 
-    file_contents = {}
-    for lab, items in groups_final:
-        if str(lab) == "-1":
-            continue
-        for file_name in items:
-            if check_cancel and check_cancel():
+    try:
+        file_contents = {}
+        for lab, items in groups_final:
+            if str(lab) == "-1":
+                continue
+            for file_name in items:
+                if check_cancel and check_cancel():
+                    raise InterruptedError()
+                file_path = os.path.join(dir_path, file_name)
+                try:
+                    match Path(file_path).suffix.lower():
+                        case '.pdf':
+                            loader = PyPDFLoader(file_path)
+                        case '.docx':
+                            loader = UnstructuredWordDocumentLoader(file_path, mode="single")
+                    docs = loader.load()
+                    snippet_docs = docs[:3] 
+                    chunks = text_splitter.split_documents(snippet_docs)
+
+                    if chunks:
+                        text_sample = " ".join([str(c.page_content) for c in chunks[:2]])
+                        file_contents[file_name] = text_sample[:1200]
+                    else:
+                        images = convert_from_path(file_path, poppler_path=poppler_path)
+                        file_contents[file_name] = images
+                except Exception:
+                    file_contents[file_name] = "(Could not read file content)"
+
+        labeled_groups = {}
+        total_groups = len(groups_final)
+
+        for idx, (lab, items) in enumerate(groups_final):
+            if check_cancel and check_cancel(): 
                 raise InterruptedError()
-            file_path = os.path.join(dir_path, file_name)
-            try:
-                match Path(file_path).suffix.lower():
-                    case '.pdf':
-                        loader = PyPDFLoader(file_path)
-                    case '.docx':
-                        loader = UnstructuredWordDocumentLoader(file_path, mode="single")
-                docs = loader.load()
-                snippet_docs = docs[:3] 
-                chunks = text_splitter.split_documents(snippet_docs)
+                
+            if str(lab) == "-1":
+                labeled_groups["Misc"] = items
+                continue
+                
+            if len(items) == 1:
+                labeled_groups[f"Single_Files_Cluster_{lab}"] = items
+                continue
 
-                if chunks:
-                    text_sample = " ".join([str(c.page_content) for c in chunks[:2]])
-                    file_contents[file_name] = text_sample[:1200]
+            cluster_context = ""
+            img_index = 0
+            img_context = []
+            temp_img_dir = os.path.join(dir_path, f"cluster_{lab}_img")
+
+            for file_name in items:
+                if isinstance(file_contents.get(file_name, ''), str):
+                    cluster_context += f"--- File: {file_name} ---\n"
+                    cluster_context += f"Content Sample: {file_contents.get(file_name, '')}\n\n"
                 else:
-                    images = convert_from_path(file_path, poppler_path=poppler_path)
-                    file_contents[file_name] = images
-            except Exception:
-                file_contents[file_name] = "(Could not read file content)"
-
-    labeled_groups = {}
-    total_groups = len(groups_final)
-
-    for idx, (lab, items) in enumerate(groups_final):
-        if check_cancel and check_cancel(): 
-            raise InterruptedError()
+                    for page in file_contents[file_name]:
+                        if check_cancel and check_cancel():
+                            if os.path.exists(temp_img_dir): shutil.rmtree(temp_img_dir)
+                            raise InterruptedError()
+                        if not os.path.exists(temp_img_dir):
+                            os.mkdir(temp_img_dir)
+                        image_name = f"{img_index}.png"
+                        full_output_path = os.path.join(temp_img_dir, image_name)
+                        page.save(full_output_path, "PNG")
+                        img_context.append(full_output_path)
+                        img_index += 1
             
-        if str(lab) == "-1":
-            labeled_groups["Misc"] = items
-            continue
+            prompt = f'''You are an expert data cataloger. Review the following text snippets from a group of files that belong to the same semantic cluster. Based on their actual content, generate a highly concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, and return ONLY the label.\n\nCluster Content:\n{cluster_context}\nTopic Label:'''
             
-        if len(items) == 1:
-            labeled_groups[f"Single_Files_Cluster_{lab}"] = items
-            continue
-
-        cluster_context = ""
-        img_index = 0
-        img_context = []
-        temp_img_dir = os.path.join(dir_path, f"cluster_{lab}_img")
-
-        for file_name in items:
-            if isinstance(file_contents.get(file_name, ''), str):
-                cluster_context += f"--- File: {file_name} ---\n"
-                cluster_context += f"Content Sample: {file_contents.get(file_name, '')}\n\n"
-            else:
-                for page in file_contents[file_name]:
-                    if check_cancel and check_cancel():
-                        if os.path.exists(temp_img_dir): shutil.rmtree(temp_img_dir)
-                        raise InterruptedError()
-                    if not os.path.exists(temp_img_dir):
-                        os.mkdir(temp_img_dir)
-                    image_name = f"{img_index}.png"
-                    full_output_path = os.path.join(temp_img_dir, image_name)
-                    page.save(full_output_path, "PNG")
-                    img_context.append(full_output_path)
-                    img_index += 1
-        
-        prompt = f'''You are an expert data cataloger. Review the following text snippets from a group of files
-            that belong to the same semantic cluster. Based on their actual content, generate a highly concise, precise 2-to-4 word topic label.
-            Do not include introductory text, do not use quotes, and return ONLY the label.\n\n
-            Cluster Content:\n{cluster_context}\nTopic Label: '''
-        
-        try:
-            response = ollama.chat(
-                model='gemma4:cloud',
-                messages=[{'role': 'user', 'content': prompt, 'images': img_context}]
-            )
-            label = response['message']['content'].strip()
-            label = re.sub(r'[\\/*?:"<>|]', "", label)
-            
-            if not label:
+            try:
+                # 1. Structure the conversation message format for Transformers
+                content_list = []
+                loaded_images = []
+                
+                if img_context:
+                    for img_path in img_context:
+                        content_list.append({"type": "image"})
+                        loaded_images.append(Image.open(img_path).convert("RGB"))
+                        
+                content_list.append({"type": "text", "text": prompt})
+                
+                messages = [
+                    {
+                        "role": "user",
+                        "content": content_list
+                    }
+                ]
+                
+                # 2. Render input tensor representations using the model's processor wrapper
+                text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                
+                if loaded_images:
+                    inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
+                else:
+                    inputs = processor(text=text_prompt, return_tensors="pt")
+                    
+                # Safe move to strictly "cuda" device 
+                inputs = {k: v.to("cuda") for k, v in inputs.items()}
+                
+                # 3. Model Inference Sequence Execution
+                with torch.no_grad():
+                    generated_ids = llm.generate(**inputs, max_new_tokens=40)
+                    
+                # Extract generated tokens (excluding prompt token array overhead)
+                generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
+                label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+                label = re.sub(r'[\\/*?:"<>|]', "", label)
+                
+                if not label:
+                    label = f"Cluster_{lab}"
+            except Exception as e:
+                print(f"Error generating label for cluster {lab}: {e}")
                 label = f"Cluster_{lab}"
-        except Exception as e:
-            label = f"Cluster_{lab}"
 
-        labeled_groups[label] = items
-        msg = f"Generated label: '{label}' for group {lab}"
-        print(msg)
-        if status_callback: status_callback(msg)
-        
-        if os.path.exists(temp_img_dir):
-            shutil.rmtree(temp_img_dir)
+            labeled_groups[label] = items
+            msg = f"Generated label: '{label}' for group {lab}"
+            print(msg)
+            if status_callback: status_callback(msg)
             
-        if progress_callback:
-            progress_callback(int(50 + ((idx + 1) / total_groups) * 40))
+            if os.path.exists(temp_img_dir):
+                shutil.rmtree(temp_img_dir)
+                
+            if progress_callback:
+                progress_callback(int(50 + ((idx + 1) / total_groups) * 40))
 
-    return labeled_groups
+        return labeled_groups
+    finally:
+        # Guarantee the LLM unloads even if user cancels
+        unload_llm()
 
 def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_callback=None, check_cancel=None):
     if not groups_final:

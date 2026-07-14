@@ -1,8 +1,8 @@
 transformers
 sentence-transformers
+accelerate
 scikit-learn
 pymupdf
-matplotlib
 langchain
 langchain-text-splitters
 unstructured
