@@ -7,6 +7,7 @@ import os
 import platform
 import subprocess
 import threading 
+import time
 
 from fileSort import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
@@ -112,6 +113,7 @@ def check_cancel_status():
 
 def sorting_thread_worker(current_dir):
     global is_cancelled
+    start_time = time.perf_counter() # Start timing the sorting process
     try:
         # Step 1: Semantic Clustering
         clusters = SemanticClustering(
@@ -147,6 +149,10 @@ def sorting_thread_worker(current_dir):
     except Exception as e:
         update_status_console(f"Execution Error: {str(e)}")
     finally:
+        end_time = time.perf_counter() # End timing the sorting process
+        elapsed_time = end_time - start_time
+        minutes, seconds = divmod(elapsed_time, 60)
+        update_status_console(f"Sorting completed in {int(minutes)}m {int(seconds)}s")
         # Reset elements cleanly on complete or cancel
         update_progress_bar(100 if not is_cancelled else 0)
         sort_btn.config(state=tk.NORMAL)

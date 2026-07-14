@@ -48,7 +48,7 @@ def load_llm():
         print("Loading LLM into VRAM...")
         model_id = "google/gemma-4-E2B-it"
         processor = AutoProcessor.from_pretrained(model_id)
-        llm = AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda")
+        llm = AutoModelForMultimodalLM.from_pretrained(model_id, dtype=torch.bfloat16).to("cuda")
 
 def unload_llm():
     global processor, llm
