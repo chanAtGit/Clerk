@@ -8,7 +8,7 @@ import platform
 import subprocess
 import threading 
 
-from Semantics import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
+from fileSort import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
 worker = None 
@@ -226,29 +226,62 @@ if __name__ == "__main__":
     file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     scrollbar.config(command=file_listbox.yview)
 
-    # COMPONENT 2: RIGHT FRAME (STATUS AND USER CONTROLS)
-    control_frame = ttk.Frame(root, relief="ridge", padding=10)
-    control_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
-    control_frame.grid_propagate(False)
-    control_frame.rowconfigure(0, weight=0)
-    control_frame.rowconfigure(1, weight=0)
-    control_frame.columnconfigure(0, weight=1)
+    # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, AND CLERKBOT)
+    right_container = ttk.Frame(root)
+    right_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
+    right_container.rowconfigure(1, weight=1)
+    right_container.columnconfigure(0, weight=1)
 
-    progress_label = ttk.Label(control_frame, text="Sorting Progress Indicator:")
+    # --- Top Navigation Frame ---
+    nav_frame = ttk.Frame(right_container)
+    nav_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+    
+    btn_page1 = ttk.Button(nav_frame, text="File Sort", command=lambda: page1.tkraise())
+    btn_page1.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+    
+    btn_page2 = ttk.Button(nav_frame, text="ClerkBot", command=lambda: page2.tkraise())
+    btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+
+    # --- Pages Container ---
+    pages_container = ttk.Frame(right_container)
+    pages_container.grid(row=1, column=0, sticky="nsew")
+    pages_container.rowconfigure(0, weight=1)
+    pages_container.columnconfigure(0, weight=1)
+
+    # --- Page 1: File Sort ---
+    page1 = ttk.Frame(pages_container, relief="ridge", padding=10)
+    page1.grid(row=0, column=0, sticky="nsew")
+    page1.grid_propagate(False)
+    page1.rowconfigure(0, weight=0)
+    page1.rowconfigure(1, weight=0)
+    page1.columnconfigure(0, weight=1)
+
+    progress_label = ttk.Label(page1, text="Sorting Progress Indicator:")
     progress_label.grid(row=0, column=0, sticky="w", pady=(10, 2))
 
-    progress_bar = ttk.Progressbar(control_frame, orient="horizontal", mode="determinate")
+    progress_bar = ttk.Progressbar(page1, orient="horizontal", mode="determinate")
     progress_bar.grid(row=1, column=0, sticky="ew", pady=5)
 
-    status_text = ttk.Label(control_frame, text="", font=("Consolas", 9))
+    status_text = ttk.Label(page1, text="", font=("Consolas", 9))
     status_text.grid(row=2, column=0, sticky="ew",pady=5)
     status_text.bind("<Configure>", auto_wrap)
 
-    btn_panel = ttk.Frame(control_frame)
+    btn_panel = ttk.Frame(page1)
     btn_panel.grid(row=3, column=0, sticky="ew", pady=5)
     sort_btn = tk.Button(btn_panel, text="Sort", command=semantic_file_sort, width=8, font=("Arial", 11))
     sort_btn.pack(side=tk.LEFT)
     cancel_btn = tk.Button(btn_panel, text="Cancel", command=cancel_file_sort, width=8, font=("Arial", 11), state=tk.DISABLED)
     cancel_btn.pack(side=tk.RIGHT)
+
+    # --- Page 2: ClerkBot Barebones ---
+    # TODO: Add RAG Chatbot functionalities
+    page2 = ttk.Frame(pages_container, relief="ridge", padding=10)
+    page2.grid(row=0, column=0, sticky="nsew")
+    
+    clerkbot_label = tk.Label(page2, text="ClerkBot", font=("Arial", 16))
+    clerkbot_label.pack(expand=True)
+
+    # Initialize by showing Page 1 by default
+    page1.tkraise()
 
     root.mainloop()

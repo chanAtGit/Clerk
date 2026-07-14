@@ -16,7 +16,6 @@ from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDo
 from PIL import Image
 from docx2pdf import convert
 from pdf2image import convert_from_path
-import time
 
 # --- Configuration ---
 poppler_path = None
