@@ -98,13 +98,14 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> list:
+def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) -> list:
     if at_root: # if the clustering takes place at root directory, PCA is needed to remove noise
+        print("Start clustering...")
         pca = PCA(n_components=3, random_state=42)
-        reduced = pca.fit_transform(np.array(data))
+        reduced = pca.fit_transform(np.array(embeddings))
     else:
-        reduced = np.array(data)
-    cluster_values = np.arange(1, int(reduced.shape[0] / 2))
+        reduced = np.array(embeddings)
+    cluster_values = np.arange(1, int(reduced.shape[0]))
     
     best_clusters = None
     best_score = -1
@@ -121,6 +122,7 @@ def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> li
             
             if len(set(search_labels)) > 1:
                 score = silhouette_score(reduced[core_samples_mask], search_labels, metric="cosine")
+
                 if score > best_score: 
                     best_score = score 
                     best_clusters = cluster
@@ -129,6 +131,28 @@ def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> li
     if best_score > 0.45:
         print(f"Best clusters: {best_clusters}, score: {best_score:.3f}")
         best_labels = [str(lab + 1) for lab in best_labels] # convert the labels from int to str. First label is "1"
+        
+        if recursive:
+            for cluster_lab in range(1, best_clusters + 1):
+                cluster_embeddings = []
+                for i in range(len(embeddings)):
+                    if best_labels[i] == str(cluster_lab):
+                        # get all embeddings that belong to a cluster
+                        cluster_embeddings.append(embeddings[i])
+                
+                if len(cluster_embeddings) < 3: # skipping over clusters that only have 2 elements
+                    continue
+                
+                # generate sub labels
+                sub_labels = optimal_clustering(cluster_embeddings, at_root=False, recursive=recursive)
+                if sub_labels:
+                    # append sub labels to labels (eg. A label would be 1.1, meaning it belongs to cluster 1 and its subcluster 1)
+                    current = 0
+                    for i in range(len(best_labels)):
+                        if best_labels[i] == str(cluster_lab):
+                            best_labels[i] = best_labels[i] + "." + sub_labels[current]
+                            current += 1
+
         return best_labels
     else:
         print(f"Best score {best_score:.3f} is below 0.45 threshold. No cluster generated.")
@@ -232,6 +256,7 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
     
     try:
         file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+
         if not file_embeddings_dict:
             return None
         
@@ -239,14 +264,17 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
         file_names = list(file_embeddings_dict.keys())
         mean_embeddings = list(file_embeddings_dict.values())
 
-        labels_final = optimal_clustering(data=mean_embeddings, at_root=True)
-
+        labels_final = optimal_clustering(embeddings=mean_embeddings)
         groups_final = collections.defaultdict(list)
         if labels_final:
             for i, lab in enumerate(labels_final):
-                groups_final[str(lab)].append(file_names[i])
+                groups_final[lab].append(file_names[i])
 
-            groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
+            groups_final = sorted(
+                groups_final.items(), 
+                key=lambda x: (x[0] == '-1', [int(part) for part in x[0].split('.')])
+            )
+
             return groups_final 
         else:
             return None
@@ -268,7 +296,7 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
     try:
         file_contents = {}
         for lab, items in groups_final:
-            if str(lab) == "-1":
+            if lab == "-1":
                 continue
             for file_name in items:
                 if check_cancel and check_cancel():
@@ -300,7 +328,7 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
             if check_cancel and check_cancel(): 
                 raise InterruptedError()
                 
-            if str(lab) == "-1":
+            if lab == "-1":
                 labeled_groups["Misc"] = items
                 continue
                 
@@ -377,7 +405,11 @@ def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, p
                 print(f"Error generating label for cluster {lab}: {e}")
                 label = f"Cluster_{lab}"
 
-            labeled_groups[label] = items
+            if label in list(labeled_groups.keys()): # if the label already exists, append the items to that label
+                labeled_groups[label].extend(items)
+            else:
+                labeled_groups[label] = items
+
             msg = f"Generated label: '{label}' for group {lab}"
             print(msg)
             if status_callback: status_callback(msg)
@@ -403,7 +435,8 @@ def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_
         if not lab or not items or len(items) == 1:
             continue
         cluster_dir = os.path.join(dir_path, lab)
-        os.makedirs(cluster_dir, exist_ok=True)
+        if not os.path.exists(cluster_dir):
+            os.makedirs(cluster_dir, exist_ok=True)
         
         for item in items:
             if check_cancel and check_cancel(): raise InterruptedError()
