@@ -98,9 +98,12 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def optimal_kmeans_clustering(data:list, status_callback=None):
-    pca = PCA(n_components=3, random_state=42)
-    reduced = pca.fit_transform(np.array(data))
+def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> list:
+    if at_root: # if the clustering takes place at root directory, PCA is needed to remove noise
+        pca = PCA(n_components=3, random_state=42)
+        reduced = pca.fit_transform(np.array(data))
+    else:
+        reduced = np.array(data)
     cluster_values = np.arange(1, int(reduced.shape[0] / 2))
     
     best_clusters = None
@@ -123,10 +126,13 @@ def optimal_kmeans_clustering(data:list, status_callback=None):
                     best_clusters = cluster
                     best_labels = labels
 
-    msg = f"Best clusters: {best_clusters}, score: {best_score:.3f}"
-    print(msg)
-    if status_callback: status_callback(msg)
-    return best_clusters, best_labels
+    if best_score > 0.45:
+        print(f"Best clusters: {best_clusters}, score: {best_score:.3f}")
+    else:
+        print(f"Best score {best_score:.3f} is below 0.45 threshold. No cluster generated.")
+        return None
+
+    return best_labels
 
 def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
     try:
@@ -233,14 +239,17 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
         file_names = list(file_embeddings_dict.keys())
         mean_embeddings = list(file_embeddings_dict.values())
 
-        best_centroids, labels_final = optimal_kmeans_clustering(mean_embeddings, status_callback)
+        labels_final = optimal_clustering(data=mean_embeddings, at_root=True)
 
         groups_final = collections.defaultdict(list)
-        for i, lab in enumerate(labels_final):
-            groups_final[str(lab)].append(file_names[i])
+        if labels_final:
+            for i, lab in enumerate(labels_final):
+                groups_final[str(lab)].append(file_names[i])
 
-        groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
-        return groups_final 
+            groups_final = sorted(groups_final.items(), key=lambda x: (int(x[0]) == -1, int(x[0])))
+            return groups_final 
+        else:
+            return None
     finally:
         # Guarantee the embedding model unloads even if user cancels
         unload_embedding_model()
