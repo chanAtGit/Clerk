@@ -128,6 +128,7 @@ def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> li
 
     if best_score > 0.45:
         print(f"Best clusters: {best_clusters}, score: {best_score:.3f}")
+        return best_labels
     else:
         print(f"Best score {best_score:.3f} is below 0.45 threshold. No cluster generated.")
         return None
