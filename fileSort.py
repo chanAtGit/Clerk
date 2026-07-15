@@ -111,7 +111,7 @@ def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> li
     best_labels = None
 
     for cluster in cluster_values:
-        model = AgglomerativeClustering(n_clusters=cluster, metric='cosine', linkage='average')
+        model = AgglomerativeClustering(n_clusters=cluster, linkage='average')
         labels = model.fit_predict(reduced)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         
@@ -128,12 +128,11 @@ def optimal_clustering(data:list, at_root:bool=True, recursive:bool=False) -> li
 
     if best_score > 0.45:
         print(f"Best clusters: {best_clusters}, score: {best_score:.3f}")
+        best_labels = [str(lab + 1) for lab in best_labels] # convert the labels from int to str. First label is "1"
         return best_labels
     else:
         print(f"Best score {best_score:.3f} is below 0.45 threshold. No cluster generated.")
         return None
-
-    return best_labels
 
 def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
     try:
