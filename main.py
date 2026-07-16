@@ -9,7 +9,7 @@ import subprocess
 import threading 
 import time
 
-from fileSort import semantics_init, SemanticClustering, AutoLabelClusters, MoveFiles
+from fileSort import file_sort_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
 worker = None 
@@ -139,7 +139,11 @@ def sorting_thread_worker(current_dir):
                 progress_callback=update_progress_bar,
                 check_cancel=check_cancel_status
             )
-            update_status_console("Sorting job completed successfully!")
+            end_time = time.perf_counter() # End timing the sorting process
+            elapsed_time = end_time - start_time
+            minutes, seconds = divmod(elapsed_time, 60)
+            update_status_console(f"Sorting completed in {int(minutes)}m {int(seconds)}s")
+
         else:
             if not is_cancelled:
                 update_status_console("No clusters generated. Process aborted.")
@@ -149,11 +153,6 @@ def sorting_thread_worker(current_dir):
     except Exception as e:
         update_status_console(f"Execution Error: {str(e)}")
     finally:
-        end_time = time.perf_counter() # End timing the sorting process
-        elapsed_time = end_time - start_time
-        minutes, seconds = divmod(elapsed_time, 60)
-        update_status_console(f"Sorting completed in {int(minutes)}m {int(seconds)}s")
-        # Reset elements cleanly on complete or cancel
         update_progress_bar(100 if not is_cancelled else 0)
         sort_btn.config(state=tk.NORMAL)
         cancel_btn.config(state=tk.DISABLED)
@@ -188,7 +187,7 @@ def auto_wrap(event):
 
 ## GUI Layout ##
 if __name__ == "__main__":
-    semantics_init()
+    file_sort_init()
     root = tk.Tk()
     root.title("Clerk")
     root.geometry("950x650")

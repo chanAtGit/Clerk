@@ -1,7 +1,11 @@
 import os
+import platform
 import shutil
 import torch
 import gc
+import numpy as np
+import re, unicodedata
+from diskcache import Cache # for caching mean embeddings
 from pathlib import Path
 from huggingface_hub import login
 from transformers import AutoProcessor, AutoModelForMultimodalLM
@@ -9,8 +13,6 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import AgglomerativeClustering
-import numpy as np
-import re, unicodedata, collections
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 from PIL import Image
@@ -21,26 +23,77 @@ from pdf2image import convert_from_path
 poppler_path = None
 processor = None
 llm = None  
-embedding_model = None  
+embedding_model = None 
+cache = None 
 
 def clear_vram():
     """Forces Python garbage collection and clears PyTorch CUDA cache."""
     gc.collect()
     torch.cuda.empty_cache()
 
+def get_file_id(file_path: str):
+    # Fetch file system attributes
+    stat_info = os.stat(file_path)
+    # Pair device ID and inode/file index
+    return (stat_info.st_dev, stat_info.st_ino)
+
+def store_cache_embedding(file_path: str, embedding):
+    global cache
+    if cache is None:
+        print("Cache Error: Cache is not initialised.")
+        return
+    if not os.path.exists(file_path):
+        print(f"Cache Error: File does not exist: {file_path}")
+        return
+    # get unique file id
+    file_id = get_file_id(file_path)
+    # set key-value pair
+    cache.set(file_id, embedding)
+
+def get_cache_embedding(file_path: str):
+    global cache
+    if cache is None:
+        print("Cache Error: Cache is not initialised.")
+        return None
+    if not os.path.exists(file_path):
+        print(f"Cache Error: File does not exist: {file_path}")
+        return None
+    # get unique file id
+    file_id = get_file_id(file_path)
+    # get value (embedding) from id
+    embedding = cache.get(file_id)
+    return embedding
+
+def convert_pdf_to_img(pdf_path: str):
+    global poppler_path
+    if not os.path.exists(pdf_path):
+        return None
+    if platform.system() != 'Linux':
+        images = convert_from_path(pdf_path, poppler_path=poppler_path)
+    else:
+        images = convert_from_path(pdf_path)
+    return images
+
 def load_embedding_model():
-    global embedding_model
+    global embedding_model, cache
     if embedding_model is None:
         print("Loading embedding model into VRAM...")
         embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
+    if cache is None:
+        cache = Cache('my-cache', limit=10000, evict='lru')
+        # Create or load cache. Cap the cache at 10,000 items, using the Least Recently Used (LRU) policy
 
 def unload_embedding_model():
-    global embedding_model
+    global embedding_model, cache
     if embedding_model is not None:
         print("Unloading embedding model from VRAM...")
         del embedding_model
         embedding_model = None
         clear_vram()
+    if cache is not None:
+        cache.close()
+        del cache
+        cache = None
 
 def load_llm():
     global processor, llm
@@ -60,7 +113,7 @@ def unload_llm():
         processor = None
         clear_vram()
 
-def semantics_init():
+def file_sort_init():
     """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
     global poppler_path
     huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
@@ -68,7 +121,8 @@ def semantics_init():
 
     if not huggingface_token:
         raise ValueError("HUGGINGFACE_TOKEN environment variable is not set.")
-    if not poppler_path:
+    
+    if not poppler_path and platform.system() != 'Linux': # only linux has poppler automatically installed
         raise ValueError("POPPLER_PATH environment variable is not set.")
 
     login(token=huggingface_token)
@@ -112,7 +166,8 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
     best_labels = None
 
     for cluster in cluster_values:
-        model = AgglomerativeClustering(n_clusters=cluster, linkage='average')
+        model = AgglomerativeClustering(n_clusters=cluster, metric="cosine", linkage='average')
+        # cosine metric is the best for high dimensional embeddings
         labels = model.fit_predict(reduced)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         
@@ -144,7 +199,7 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
                     continue
                 
                 # generate sub labels
-                sub_labels = optimal_clustering(cluster_embeddings, at_root=False, recursive=recursive)
+                sub_labels = optimal_clustering(cluster_embeddings, at_root=False)
                 if sub_labels:
                     # append sub labels to labels (eg. A label would be 1.1, meaning it belongs to cluster 1 and its subcluster 1)
                     current = 0
@@ -168,7 +223,7 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
             embeddings = embedding_model.encode(cleaned_sentences, convert_to_numpy=True)
             return np.mean(embeddings, axis=0)
         else:
-            images = convert_from_path(pdf_path, poppler_path=poppler_path)
+            images = convert_pdf_to_img(pdf_path)
             embeddings = []
             for img in images:
                 img_embedding = embedding_model.encode(img, convert_to_numpy=True)
@@ -192,7 +247,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None):
         else:
             temp_pdf_path = "temp_doc.pdf"
             convert(docx_path, temp_pdf_path)
-            images = convert_from_path(temp_pdf_path)
+            images = convert_pdf_to_img(temp_pdf_path)
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
             embeddings = []
@@ -218,6 +273,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
             raise InterruptedError()
 
         file_path = os.path.join(dir_path, file_name)
+        
         if not os.path.isfile(file_path):
             continue
 
@@ -225,14 +281,19 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         print(msg)
         if status_callback: status_callback(msg)
 
-        mean_embedding = None
-        match Path(file_path).suffix.lower():
-            case '.pdf':
-                mean_embedding = generate_pdf_mean_embedding(file_path, status_callback)
-            case '.docx':
-                mean_embedding = generate_docx_mean_embedding(file_path, status_callback)
-            case '.png' | '.jpg' | '.jpeg' | '.bmp' | '.tiff':
-                mean_embedding = embedding_model.encode(Image.open(file_path), convert_to_numpy=True)
+        # Check cache for embedding
+        mean_embedding = get_cache_embedding(file_path)
+        # If the cache misses
+        if mean_embedding is None:
+            # generate mean embedding
+            match Path(file_path).suffix.lower():
+                case '.pdf':
+                    mean_embedding = generate_pdf_mean_embedding(file_path, status_callback)
+                case '.docx':
+                    mean_embedding = generate_docx_mean_embedding(file_path, status_callback)
+                case '.png' | '.jpg' | '.jpeg' | '.bmp' | '.tiff':
+                    mean_embedding = embedding_model.encode(Image.open(file_path), convert_to_numpy=True)
+            if mean_embedding is not None: store_cache_embedding(file_path, mean_embedding)
         
         if mean_embedding is not None:
             mean_embeddings[file_name] = mean_embedding
@@ -244,6 +305,34 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         return None
     
     return mean_embeddings
+
+def insert_groups_dict(groups: dict, lab: str, file_name: str):
+    """Recursively inserts a file into a nested hierarchical cluster dictionary."""
+    parts = lab.split('.', 1)
+    current_key = parts[0]
+    
+    if len(parts) > 1:
+        # We have sub-labels remaining (e.g., "2" from "2.1")
+        remaining_lab = parts[1]
+        if current_key not in groups:
+            groups[current_key] = {}
+        elif isinstance(groups[current_key], list):
+            # Fallback wrapper if a node suddenly becomes parent of a sub-cluster
+            groups[current_key] = {"_unclustered": groups[current_key]}
+            
+        insert_groups_dict(groups[current_key], remaining_lab, file_name)
+    else:
+        # We are at the final leaf cluster
+        if current_key not in groups:
+            groups[current_key] = []
+        elif isinstance(groups[current_key], dict):
+            # Fallback if leaf label matches an existing parent folder
+            if "_unclustered" not in groups[current_key]:
+                groups[current_key]["_unclustered"] = []
+            groups[current_key]["_unclustered"].append(file_name)
+            return
+            
+        groups[current_key].append(file_name)
 
 def SemanticClustering(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     if check_cancel and check_cancel(): raise InterruptedError()
@@ -265,190 +354,345 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
         mean_embeddings = list(file_embeddings_dict.values())
 
         labels_final = optimal_clustering(embeddings=mean_embeddings)
-        groups_final = collections.defaultdict(list)
+        groups_final = {}
         if labels_final:
             for i, lab in enumerate(labels_final):
-                groups_final[lab].append(file_names[i])
+                insert_groups_dict(groups_final, lab, file_names[i])
 
-            groups_final = sorted(
-                groups_final.items(), 
-                key=lambda x: (x[0] == '-1', [int(part) for part in x[0].split('.')])
-            )
+             # Recursive sorting function
+            def sort_nested_dict(d):
+                if isinstance(d, dict):
+                    def sort_key(k):
+                        if k == '-1':
+                            return (True, 0)  # Keep Noise (-1) at the absolute bottom
+                        try:
+                            return (False, float(k))  # Sort numerically (e.g., '2' before '10')
+                        except ValueError:
+                            return (False, k)  # Alphabetical fallback
+                    
+                    # Sort dictionary keys and recursively process child nodes
+                    sorted_items = sorted(d.items(), key=lambda x: sort_key(x[0]))
+                    return [(k, sort_nested_dict(v)) for k, v in sorted_items]
+                elif isinstance(d, list):
+                    # Alphabetically sort final list of file names
+                    return sorted(d)
+                return d
 
-            return groups_final 
+            return sort_nested_dict(groups_final)
         else:
+            if status_callback: status_callback("No cluster generated due to low silhouette score or not enough files.")
             return None
     finally:
         # Guarantee the embedding model unloads even if user cancels
         unload_embedding_model()
 
-def AutoLabelClusters(dir_path: str, groups_final: list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+# --- Helper 1: Extract File Content Snippets ---
+def get_file_sample(file_path: str) -> str | list:
+    """Extracts a text chunk sample or returns PIL Images if the file has no extractable text."""
+    global poppler_path
+    try:
+        suffix = Path(file_path).suffix.lower()
+        match suffix:
+            case '.pdf':
+                loader = PyPDFLoader(file_path)
+            case '.docx':
+                loader = UnstructuredWordDocumentLoader(file_path, mode="single")
+            case _:
+                return "(Unsupported format)"
+
+        docs = loader.load()
+        snippet_docs = docs[:3] 
+        chunks = text_splitter.split_documents(snippet_docs)
+
+        if chunks:
+            text_sample = " ".join([str(c.page_content) for c in chunks[:2]])
+            return text_sample[:1200]
+        else:
+            # Fallback to images (OCR/Vision context)
+            images = convert_pdf_to_img(file_path)
+            return images
+    except Exception as e:
+        return f"(Could not read file content: {e})"
+
+
+# --- Helper 2: LLM Inference Sequence ---
+def generate_llm_label(prompt: str, img_paths: list = None, check_cancel=None) -> str:
+    """Executes prompt formatting and tensor processing to query the LLM model."""
+    global processor, llm
+    try:
+        content_list = []
+        loaded_images = []
+        
+        if img_paths:
+            for img_path in img_paths:
+                if check_cancel and check_cancel():
+                    raise InterruptedError()
+                content_list.append({"type": "image"})
+                loaded_images.append(Image.open(img_path).convert("RGB"))
+                
+        content_list.append({"type": "text", "text": prompt})
+        
+        messages = [{"role": "user", "content": content_list}]
+        text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        
+        if loaded_images:
+            inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
+        else:
+            inputs = processor(text=text_prompt, return_tensors="pt")
+            
+        inputs = {k: v.to("cuda") for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            generated_ids = llm.generate(**inputs, max_new_tokens=40)
+            
+        generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
+        label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        
+        # Strip filesystem-incompatible characters
+        label = re.sub(r'[\\/*?:"<>|]', "", label)
+        return label if label else "Unlabeled_Cluster"
+    except Exception as e:
+        print(f"Error executing LLM generation: {e}")
+        return "Unlabeled_Cluster"
+
+
+# --- Core Orchestration & Recursive Processing ---
+# --- Core Orchestration & Recursive Processing ---
+def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     global processor, llm
     if not groups_final:
         return {}
-    
+        
     msg = "Analyzing clusters via LLM content descriptions..."
     print(msg)
     if status_callback: status_callback(msg)
     
     load_llm()
 
-    try:
-        file_contents = {}
-        for lab, items in groups_final:
-            if lab == "-1":
-                continue
-            for file_name in items:
-                if check_cancel and check_cancel():
-                    raise InterruptedError()
-                file_path = os.path.join(dir_path, file_name)
-                try:
-                    match Path(file_path).suffix.lower():
-                        case '.pdf':
-                            loader = PyPDFLoader(file_path)
-                        case '.docx':
-                            loader = UnstructuredWordDocumentLoader(file_path, mode="single")
-                    docs = loader.load()
-                    snippet_docs = docs[:3] 
-                    chunks = text_splitter.split_documents(snippet_docs)
+    # Helpers to support both raw dictionaries and sorted list-of-tuples representations
+    def is_leaf_node(node):
+        if isinstance(node, list):
+            return len(node) == 0 or isinstance(node[0], str)
+        return False
 
-                    if chunks:
-                        text_sample = " ".join([str(c.page_content) for c in chunks[:2]])
-                        file_contents[file_name] = text_sample[:1200]
-                    else:
-                        images = convert_from_path(file_path, poppler_path=poppler_path)
-                        file_contents[file_name] = images
-                except Exception:
-                    file_contents[file_name] = "(Could not read file content)"
+    def get_node_children(node):
+        if isinstance(node, dict):
+            return list(node.items())
+        elif isinstance(node, list) and len(node) > 0 and isinstance(node[0], tuple):
+            return node
+        return None
 
-        labeled_groups = {}
-        total_groups = len(groups_final)
+    # Recursively merges duplicate nodes together
+    def merge_nodes(n1, n2):
+        if is_leaf_node(n1) and is_leaf_node(n2):
+            # Combine file lists and preserve insertion order
+            return list(dict.fromkeys(n1 + n2))
+            
+        elif isinstance(n1, dict) and isinstance(n2, dict):
+            # Recursively merge dictionary child nodes key-by-key
+            merged = dict(n1)
+            for k, v in n2.items():
+                if k in merged:
+                    merged[k] = merge_nodes(merged[k], v)
+                else:
+                    merged[k] = v
+            return merged
+            
+        else:
+            # Fallback for structural type mismatches (rare edge-cases)
+            if isinstance(n1, dict) and is_leaf_node(n2):
+                merged = dict(n1)
+                if "_unclustered" in merged:
+                    merged["_unclustered"] = list(dict.fromkeys(merged["_unclustered"] + n2))
+                else:
+                    merged["_unclustered"] = n2
+                return merged
+            elif is_leaf_node(n1) and isinstance(n2, dict):
+                merged = dict(n2)
+                if "_unclustered" in merged:
+                    merged["_unclustered"] = list(dict.fromkeys(merged["_unclustered"] + n1))
+                else:
+                    merged["_unclustered"] = n1
+                return merged
+        return n1
 
-        for idx, (lab, items) in enumerate(groups_final):
-            if check_cancel and check_cancel(): 
-                raise InterruptedError()
-                
-            if lab == "-1":
-                labeled_groups["Misc"] = items
-                continue
-                
-            if len(items) == 1:
-                labeled_groups[f"Single_Files_Cluster_{lab}"] = items
-                continue
+    # Determine total labels we need to generate to manage progress bar linear updates
+    def count_total_jobs(node):
+        if is_leaf_node(node):
+            return 1
+        children = get_node_children(node)
+        if children is not None:
+            return 1 + sum(count_total_jobs(child) for _, child in children)
+        return 0
 
+    # Format the root-level iterable children
+    root_children = list(groups_final.items()) if isinstance(groups_final, dict) else groups_final
+    total_jobs = sum(count_total_jobs(node) for _, node in root_children)
+    completed_jobs = 0
+
+    def update_progress():
+        nonlocal completed_jobs
+        completed_jobs += 1
+        if progress_callback:
+            # Scale smoothly between 50% and 90% progress markers
+            val = int(50 + (completed_jobs / total_jobs) * 40)
+            progress_callback(val)
+
+    # Recursive Tree Processing
+    def label_node_recursive(lab: str, node):
+        nonlocal completed_jobs
+        if check_cancel and check_cancel():
+            raise InterruptedError()
+
+        # Rule 1: Noise remains noise
+        if lab == "-1":
+            update_progress()
+            return "Misc", node
+
+        # Rule 2: Leaf Nodes (Files list) -> Label by file contents
+        if is_leaf_node(node):
             cluster_context = ""
             img_index = 0
             img_context = []
             temp_img_dir = os.path.join(dir_path, f"cluster_{lab}_img")
 
-            for file_name in items:
-                if isinstance(file_contents.get(file_name, ''), str):
-                    cluster_context += f"--- File: {file_name} ---\n"
-                    cluster_context += f"Content Sample: {file_contents.get(file_name, '')}\n\n"
-                else:
-                    for page in file_contents[file_name]:
-                        if check_cancel and check_cancel():
-                            if os.path.exists(temp_img_dir): shutil.rmtree(temp_img_dir)
-                            raise InterruptedError()
-                        if not os.path.exists(temp_img_dir):
-                            os.mkdir(temp_img_dir)
-                        image_name = f"{img_index}.png"
-                        full_output_path = os.path.join(temp_img_dir, image_name)
-                        page.save(full_output_path, "PNG")
-                        img_context.append(full_output_path)
-                        img_index += 1
-            
-            prompt = f'''You are an expert data cataloger. Review the following text snippets from a group of files that belong to the same semantic cluster. Based on their actual content, generate a highly concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, and return ONLY the label.\n\nCluster Content:\n{cluster_context}\nTopic Label:'''
-            
             try:
-                # 1. Structure the conversation message format for Transformers
-                content_list = []
-                loaded_images = []
-                
-                if img_context:
-                    for img_path in img_context:
-                        content_list.append({"type": "image"})
-                        loaded_images.append(Image.open(img_path).convert("RGB"))
-                        
-                content_list.append({"type": "text", "text": prompt})
-                
-                messages = [
-                    {
-                        "role": "user",
-                        "content": content_list
-                    }
-                ]
-                
-                # 2. Render input tensor representations using the model's processor wrapper
-                text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                
-                if loaded_images:
-                    inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
-                else:
-                    inputs = processor(text=text_prompt, return_tensors="pt")
+                for file_name in node:
+                    if check_cancel and check_cancel():
+                        raise InterruptedError()
                     
-                # Safe move to strictly "cuda" device 
-                inputs = {k: v.to("cuda") for k, v in inputs.items()}
-                
-                # 3. Model Inference Sequence Execution
-                with torch.no_grad():
-                    generated_ids = llm.generate(**inputs, max_new_tokens=40)
-                    
-                # Extract generated tokens (excluding prompt token array overhead)
-                generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
-                label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
-                label = re.sub(r'[\\/*?:"<>|]', "", label)
-                
-                if not label:
+                    file_path = os.path.join(dir_path, file_name)
+                    sample = get_file_sample(file_path)
+
+                    if isinstance(sample, str):
+                        cluster_context += f"--- File: {file_name} ---\n"
+                        cluster_context += f"Content Sample: {sample}\n\n"
+                    elif isinstance(sample, list):  # Returned page-images list
+                        os.makedirs(temp_img_dir, exist_ok=True)
+                        for page in sample:
+                            if check_cancel and check_cancel():
+                                raise InterruptedError()
+                            image_name = f"{img_index}.png"
+                            full_output_path = os.path.join(temp_img_dir, image_name)
+                            page.save(full_output_path, "PNG")
+                            img_context.append(full_output_path)
+                            img_index += 1
+
+                prompt = (
+                    f"You are an expert data cataloger. Review the following text snippets from a group of files "
+                    f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
+                    f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
+                    f"and return ONLY the label.\n\nCluster Content:\n{cluster_context}\nTopic Label:"
+                )
+
+                label = generate_llm_label(prompt, img_context, check_cancel)
+                if not label or label == "Unlabeled_Cluster":
                     label = f"Cluster_{lab}"
-            except Exception as e:
-                print(f"Error generating label for cluster {lab}: {e}")
-                label = f"Cluster_{lab}"
 
-            if label in list(labeled_groups.keys()): # if the label already exists, append the items to that label
-                labeled_groups[label].extend(items)
-            else:
-                labeled_groups[label] = items
+            finally:
+                if os.path.exists(temp_img_dir):
+                    shutil.rmtree(temp_img_dir)
 
-            msg = f"Generated label: '{label}' for group {lab}"
-            print(msg)
-            if status_callback: status_callback(msg)
-            
-            if os.path.exists(temp_img_dir):
-                shutil.rmtree(temp_img_dir)
+            if status_callback:
+                status_callback(f"Labeled Leaf Cluster {lab} -> '{label}'")
+            update_progress()
+            return label, node
+
+        # Rule 3: Parent Nodes -> Label recursively by child directory names
+        children = get_node_children(node)
+        if children is not None:
+            labeled_children = {}
+
+            for sub_lab, sub_node in children:
+                child_label, child_labeled_node = label_node_recursive(sub_lab, sub_node)
                 
-            if progress_callback:
-                progress_callback(int(50 + ((idx + 1) / total_groups) * 40))
+                # Merge nodes dynamically if we find a duplicate child label
+                if child_label in labeled_children:
+                    if status_callback:
+                        status_callback(f"Duplicate label found! Merging nodes under child directory: '{child_label}'")
+                    labeled_children[child_label] = merge_nodes(labeled_children[child_label], child_labeled_node)
+                else:
+                    labeled_children[child_label] = child_labeled_node
 
-        return labeled_groups
+            # Extract the unique, finalized list of child labels for prompt context
+            child_labels_list = list(labeled_children.keys())
+
+            # Construct parent directory context
+            children_str = "\n".join([f"- {name}" for name in child_labels_list])
+            parent_prompt = (
+                f"You are an expert data cataloger. Review the following folder names which are sub-directories "
+                f"within a parent directory. Based on these folder names, generate a highly concise, precise "
+                f"2-to-4 word topic label for the parent directory. Do not include introductory text, do not use quotes, "
+                f"and return ONLY the label.\n\nSub-directories:\n{children_str}\nParent Directory Label:"
+            )
+
+            parent_label = generate_llm_label(parent_prompt, check_cancel=check_cancel)
+            if not parent_label or parent_label == "Unlabeled_Cluster":
+                parent_label = f"Folder_{lab}"
+
+            if status_callback:
+                status_callback(f"Labeled Parent Directory {lab} -> '{parent_label}' based on children: {child_labels_list}")
+            update_progress()
+            return parent_label, labeled_children
+
+        return f"Cluster_{lab}", node
+
+    try:
+        # Run recursive traversal at the top-level items
+        labeled_tree = {}
+        for root_lab, root_node in root_children:
+            top_label, top_labeled_node = label_node_recursive(root_lab, root_node)
+            
+            # Merge nodes dynamically if duplicate top-level folder names are generated
+            if top_label in labeled_tree:
+                if status_callback:
+                    status_callback(f"Duplicate label found! Merging nodes under root directory: '{top_label}'")
+                labeled_tree[top_label] = merge_nodes(labeled_tree[top_label], top_labeled_node)
+            else:
+                labeled_tree[top_label] = top_labeled_node
+
+        return labeled_tree
     finally:
-        # Guarantee the LLM unloads even if user cancels
         unload_llm()
 
-def MoveFiles(dir_path: str, groups_final: dict, status_callback=None, progress_callback=None, check_cancel=None):
+def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, status_callback=None, progress_callback=None, check_cancel=None):
     if not groups_final:
         return
     
+    if not subdir_path: # initial call
+        subdir_path = rootdir_path
+
     total_labels = len(groups_final)
-    for idx, (lab, items) in enumerate(groups_final.items()):
+    for idx, lab in enumerate(groups_final.keys()):
         if check_cancel and check_cancel(): raise InterruptedError()
-        if not lab or not items or len(items) == 1:
-            continue
-        cluster_dir = os.path.join(dir_path, lab)
-        if not os.path.exists(cluster_dir):
+
+        cluster_dir = subdir_path
+        if os.path.basename(os.path.normpath(subdir_path)) != lab: 
+            #if the parent directory does not have the same name as the child directory
+            cluster_dir = os.path.join(subdir_path, lab)
+
+        if isinstance(groups_final[lab], dict): # Current label is a parent directory
             os.makedirs(cluster_dir, exist_ok=True)
-        
-        for item in items:
-            if check_cancel and check_cancel(): raise InterruptedError()
-            src_path = os.path.join(dir_path, item)
-            dest_path = os.path.join(cluster_dir, item)
-            try:
-                if os.path.exists(src_path):
-                    os.rename(src_path, dest_path)
-            except Exception as e:
-                msg = f"Error moving {item} to {lab}: {e}"
-                print(msg)
-                if status_callback: status_callback(msg)
+            MoveFiles(rootdir_path, groups_final[lab], subdir_path=cluster_dir) 
+
+        elif isinstance(groups_final[lab], list): # Current label is a leaf directory
+            files = groups_final[lab]
+            if len(files) == 1: # skip 
+                continue
+            
+            os.makedirs(cluster_dir, exist_ok=True)
+
+            for item in files:
+                if check_cancel and check_cancel(): raise InterruptedError()
+                src_path = os.path.join(rootdir_path, item)
+                dest_path = os.path.join(cluster_dir, item)
+                try:
+                    if os.path.exists(src_path):
+                        os.rename(src_path, dest_path)
+                except Exception as e:
+                    msg = f"Error moving {item} to {lab}: {e}"
+                    print(msg)
+                    if status_callback: status_callback(msg)
                 
         if progress_callback:
             progress_callback(int(90 + ((idx + 1) / total_labels) * 10))

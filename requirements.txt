@@ -1,6 +1,7 @@
 transformers
 sentence-transformers
 accelerate
+diskcache
 scikit-learn
 pymupdf
 langchain
