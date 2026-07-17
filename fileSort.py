@@ -5,6 +5,7 @@ import torch
 import gc
 import numpy as np
 import re, unicodedata
+import ollama
 from diskcache import Cache # for caching mean embeddings
 from pathlib import Path
 from huggingface_hub import login
@@ -291,7 +292,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
                     mean_embedding = generate_pdf_mean_embedding(file_path, status_callback)
                 case '.docx':
                     mean_embedding = generate_docx_mean_embedding(file_path, status_callback)
-                case '.png' | '.jpg' | '.jpeg' | '.bmp' | '.tiff':
+                case '.png' | '.jpg' | '.jpeg' | '.avif' | '.bmp' | '.tiff'| '.webp':
                     mean_embedding = embedding_model.encode(Image.open(file_path), convert_to_numpy=True)
             if mean_embedding is not None: store_cache_embedding(file_path, mean_embedding)
         
@@ -416,47 +417,67 @@ def get_file_sample(file_path: str) -> str | list:
 
 
 # --- Helper 2: LLM Inference Sequence ---
-def generate_llm_label(prompt: str, img_paths: list = None, check_cancel=None) -> str:
+def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False, img_only:bool = False, check_cancel=None) -> str:
     """Executes prompt formatting and tensor processing to query the LLM model."""
     global processor, llm
     try:
-        content_list = []
-        loaded_images = []
-        
-        if img_paths:
-            for img_path in img_paths:
-                if check_cancel and check_cancel():
-                    raise InterruptedError()
-                content_list.append({"type": "image"})
-                loaded_images.append(Image.open(img_path).convert("RGB"))
+        if not online:
+            print("Local Inference")
+            content_list = []
+            loaded_images = []
+            
+            if img_paths:
+                for img_path in img_paths:
+                    if check_cancel and check_cancel():
+                        raise InterruptedError()
+                    content_list.append({"type": "image"})
+                    loaded_images.append(Image.open(img_path).convert("RGB"))
+                    
+            content_list.append({"type": "text", "text": prompt})
+            
+            messages = [{"role": "user", "content": content_list}]
+            text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            
+            if loaded_images:
+                inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
+            else:
+                inputs = processor(text=text_prompt, return_tensors="pt")
                 
-        content_list.append({"type": "text", "text": prompt})
-        
-        messages = [{"role": "user", "content": content_list}]
-        text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        
-        if loaded_images:
-            inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                generated_ids = llm.generate(**inputs, max_new_tokens=40)
+                
+            generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
+            label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+            
+            # Strip filesystem-incompatible characters
+            label = re.sub(r'[\\/*?:"<>|]', "", label)
+            return label if label else "Unlabeled_Cluster"
         else:
-            inputs = processor(text=text_prompt, return_tensors="pt")
+            # Online mode with Ollama API
+            print("Online Inference")
+            if img_paths:
+                img_paths = [path for path in img_paths if path.lower().endswith(('.png', '.jpeg', '.jpg'))]
+                if img_paths is None or len(img_paths) < 1 and img_only:
+                    return "Unlabeled_Cluster"
             
-        inputs = {k: v.to("cuda") for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            generated_ids = llm.generate(**inputs, max_new_tokens=40)
-            
-        generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
-        label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
-        
-        # Strip filesystem-incompatible characters
-        label = re.sub(r'[\\/*?:"<>|]', "", label)
-        return label if label else "Unlabeled_Cluster"
+            response = ollama.chat(
+                model="gemma4:cloud", 
+                messages=[{
+                    'role': 'user',
+                    'content': prompt,
+                    'images': img_paths # Pass the path string or bytes directly
+                }]
+            )
+            label = response.message.content
+            label = re.sub(r'[\\/*?:"<>|]', "", label)
+            return label if label else "Unlabeled_Cluster"
     except Exception as e:
         print(f"Error executing LLM generation: {e}")
         return "Unlabeled_Cluster"
 
 
-# --- Core Orchestration & Recursive Processing ---
 # --- Core Orchestration & Recursive Processing ---
 def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     global processor, llm
@@ -551,7 +572,8 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=
 
         # Rule 2: Leaf Nodes (Files list) -> Label by file contents
         if is_leaf_node(node):
-            cluster_context = ""
+            text_context = ""
+            page_img_index = 0
             img_index = 0
             img_context = []
             temp_img_dir = os.path.join(dir_path, f"cluster_{lab}_img")
@@ -562,30 +584,46 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=
                         raise InterruptedError()
                     
                     file_path = os.path.join(dir_path, file_name)
-                    sample = get_file_sample(file_path)
 
-                    if isinstance(sample, str):
-                        cluster_context += f"--- File: {file_name} ---\n"
-                        cluster_context += f"Content Sample: {sample}\n\n"
-                    elif isinstance(sample, list):  # Returned page-images list
-                        os.makedirs(temp_img_dir, exist_ok=True)
-                        for page in sample:
-                            if check_cancel and check_cancel():
-                                raise InterruptedError()
-                            image_name = f"{img_index}.png"
-                            full_output_path = os.path.join(temp_img_dir, image_name)
-                            page.save(full_output_path, "PNG")
-                            img_context.append(full_output_path)
+                    match Path(file_path).suffix.lower():
+                        case '.png' | '.jpg' | '.jpeg' | '.avif' | '.bmp' | '.tiff'| '.webp':
+                            # file is an image
+                            if img_index >= 5: # Only allow 5 normal images
+                                continue
+                            img_context.append(file_path)
                             img_index += 1
+                        case _:
+                            sample = get_file_sample(file_path)
+                            if isinstance(sample, str) and sample != "(Unsupported format)":
+                                text_context += f"--- File: {file_name} ---\n"
+                                text_context += f"Content Sample: {sample}\n\n"
+                            elif isinstance(sample, list):  # Returned page-images list
+                                os.makedirs(temp_img_dir, exist_ok=True)
+                                for page in sample:
+                                    if check_cancel and check_cancel():
+                                        raise InterruptedError()
+                                    image_name = f"{page_img_index}.png"
+                                    full_output_path = os.path.join(temp_img_dir, image_name)
+                                    page.save(full_output_path, "PNG")
+                                    img_context.append(full_output_path)
+                                    page_img_index += 1
+                img_only = (len(text_context) == 0)
+                if not img_only:
+                    prompt = (
+                        f"You are an expert data cataloger. Review the following text snippets and images from a group of files "
+                        f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
+                        f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
+                        f"and return ONLY the label.\n\nCluster Content:\n{text_context}\nTopic Label:"
+                    )
+                else:
+                    prompt = (
+                        f"You are an expert data cataloger. Review the following images from a group of files "
+                        f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
+                        f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
+                        f"and return ONLY the label.\nTopic Label:"
+                    )
 
-                prompt = (
-                    f"You are an expert data cataloger. Review the following text snippets from a group of files "
-                    f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
-                    f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
-                    f"and return ONLY the label.\n\nCluster Content:\n{cluster_context}\nTopic Label:"
-                )
-
-                label = generate_llm_label(prompt, img_context, check_cancel)
+                label = generate_llm_label(prompt, img_context, img_only=img_only, check_cancel=check_cancel)
                 if not label or label == "Unlabeled_Cluster":
                     label = f"Cluster_{lab}"
 
@@ -673,12 +711,15 @@ def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sta
 
         if isinstance(groups_final[lab], dict): # Current label is a parent directory
             os.makedirs(cluster_dir, exist_ok=True)
-            MoveFiles(rootdir_path, groups_final[lab], subdir_path=cluster_dir) 
+            num_of_subdir = len(groups_final[lab].keys())
+            # the following code avoids unnecessary sub directories (pnly 1 subdirectory inside a directory)
+            if num_of_subdir > 1:
+                MoveFiles(rootdir_path, groups_final[lab], subdir_path=cluster_dir)
+            else:
+                MoveFiles(rootdir_path, groups_final[lab], subdir_path=subdir_path)
 
         elif isinstance(groups_final[lab], list): # Current label is a leaf directory
             files = groups_final[lab]
-            if len(files) == 1: # skip 
-                continue
             
             os.makedirs(cluster_dir, exist_ok=True)
 
