@@ -20,7 +20,8 @@ recursive_sorting = True
 
 ## File and Directory Functions
 def display_files_in_dir(selected_dir: str):
-    num_of_files_label.config(text=f"Number of files: {len(os.listdir(selected_dir))}")
+    files = [f for f in os.listdir(selected_dir) if os.path.isfile(os.path.join(selected_dir, f))]
+    num_of_files_label.config(text=f"Number of files: {len(files)}")
     file_listbox.delete(0, tk.END)
 
     try:
@@ -147,10 +148,6 @@ def sorting_thread_worker(current_dir):
             elapsed_time = end_time - start_time
             minutes, seconds = divmod(elapsed_time, 60)
             update_status_console(f"Sorting completed in {int(minutes)}m {int(seconds)}s")
-
-        else:
-            if not is_cancelled:
-                update_status_console("No clusters generated. Process aborted.")
             
     except InterruptedError:
         update_status_console("Sorting job cleanly stopped by user.")
