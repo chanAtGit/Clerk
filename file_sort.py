@@ -40,30 +40,43 @@ def get_file_id(file_path: str):
 
 def store_cache_embedding(file_path: str, embedding):
     global cache
-    if cache is None:
-        print("Cache Error: Cache is not initialised.")
-        return
-    if not os.path.exists(file_path):
-        print(f"Cache Error: File does not exist: {file_path}")
-        return
-    # get unique file id
-    file_id = get_file_id(file_path)
-    # set key-value pair
-    cache.set(file_id, embedding)
+    try:
+        if cache is None:
+            print("Cache Error: Cache is not initialised.")
+            return
+        if not os.path.exists(file_path):
+            print(f"Cache Error: File does not exist: {file_path}")
+            return
+        # get unique file id
+        file_id = get_file_id(file_path)
+        value = {
+            "embedding": embedding,
+            "modified_time": os.path.getmtime(file_path) # get modification timestamp
+        }
+        # set key-value pair
+        cache.set(file_id, value)
+    except Exception as e:
+        print(f"Cache Error: Failed to store embedding for {file_path}: {e}")
 
 def get_cache_embedding(file_path: str):
     global cache
-    if cache is None:
-        print("Cache Error: Cache is not initialised.")
-        return None
-    if not os.path.exists(file_path):
-        print(f"Cache Error: File does not exist: {file_path}")
+    try:
+        if cache is None:
+            print("Cache Error: Cache is not initialised.")
+            return None
+        if not os.path.exists(file_path):
+            print(f"Cache Error: File does not exist: {file_path}")
+            return None
+    except Exception as e:
+        print(f"Cache Error: Failed to retrieve embedding for {file_path}: {e}")
         return None
     # get unique file id
     file_id = get_file_id(file_path)
     # get value (embedding) from id
-    embedding = cache.get(file_id)
-    return embedding
+    value = cache.get(file_id)
+    if value is None or os.path.getmtime(file_path) != value["modified_time"]: # cache miss or file has been modified
+        return None
+    return value["embedding"]
 
 def convert_pdf_to_img(pdf_path: str):
     global poppler_path
@@ -81,8 +94,8 @@ def load_embedding_model():
         print("Loading embedding model into VRAM...")
         embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
     if cache is None:
-        cache = Cache('my-cache', limit=10000, evict='lru')
-        # Create or load cache. Cap the cache at 10,000 items, using the Least Recently Used (LRU) policy
+        cache = Cache('my-cache', limit=1000, evict='lru')
+        # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
 
 def unload_embedding_model():
     global embedding_model, cache
@@ -153,14 +166,9 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) -> list:
-    if at_root: # if the clustering takes place at root directory, PCA is needed to remove noise
-        print("Start clustering...")
-        pca = PCA(n_components=3, random_state=42)
-        reduced = pca.fit_transform(np.array(embeddings))
-    else:
-        reduced = np.array(embeddings)
-    cluster_values = np.arange(1, int(reduced.shape[0]))
+def optimal_clustering(embeddings:list, recursive:bool=True) -> list:
+    data = np.array(embeddings)
+    cluster_values = np.arange(1, int(data.shape[0]))
     
     best_clusters = None
     best_score = -1
@@ -169,7 +177,7 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
     for cluster in cluster_values:
         model = AgglomerativeClustering(n_clusters=cluster, metric="cosine", linkage='average')
         # cosine metric is the best for high dimensional embeddings
-        labels = model.fit_predict(reduced)
+        labels = model.fit_predict(data)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         
         if n_clusters > 1:
@@ -177,7 +185,7 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
             search_labels = labels[core_samples_mask]
             
             if len(set(search_labels)) > 1:
-                score = silhouette_score(reduced[core_samples_mask], search_labels, metric="cosine")
+                score = silhouette_score(data[core_samples_mask], search_labels, metric="cosine")
 
                 if score > best_score: 
                     best_score = score 
@@ -196,11 +204,11 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
                         # get all embeddings that belong to a cluster
                         cluster_embeddings.append(embeddings[i])
                 
-                if len(cluster_embeddings) < 3: # skipping over clusters that only have 2 elements
+                if len(cluster_embeddings) < 3: # skipping over clusters that less than 3 elements
                     continue
                 
                 # generate sub labels
-                sub_labels = optimal_clustering(cluster_embeddings, at_root=False)
+                sub_labels = optimal_clustering(cluster_embeddings)
                 if sub_labels:
                     # append sub labels to labels (eg. A label would be 1.1, meaning it belongs to cluster 1 and its subcluster 1)
                     current = 0
@@ -211,7 +219,7 @@ def optimal_clustering(embeddings:list, at_root:bool=True, recursive:bool=True) 
 
         return best_labels
     else:
-        print(f"Best score {best_score:.3f} is below 0.45 threshold. No cluster generated.")
+        print(f"Best score {best_score:.3f} is below 0.40 threshold. No cluster generated.")
         return None
 
 def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
@@ -335,7 +343,7 @@ def insert_groups_dict(groups: dict, lab: str, file_name: str):
             
         groups[current_key].append(file_name)
 
-def SemanticClustering(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     if check_cancel and check_cancel(): raise InterruptedError()
     files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
     if not files_list:
@@ -354,7 +362,7 @@ def SemanticClustering(dir_path: str, status_callback=None, progress_callback=No
         file_names = list(file_embeddings_dict.keys())
         mean_embeddings = list(file_embeddings_dict.values())
 
-        labels_final = optimal_clustering(embeddings=mean_embeddings)
+        labels_final = optimal_clustering(embeddings=mean_embeddings, recursive = recursive)
         groups_final = {}
         if labels_final:
             for i, lab in enumerate(labels_final):
@@ -456,7 +464,6 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
             return label if label else "Unlabeled_Cluster"
         else:
             # Online mode with Ollama API
-            print("Online Inference")
             if img_paths:
                 img_paths = [path for path in img_paths if path.lower().endswith(('.png', '.jpeg', '.jpg'))]
                 if img_paths is None or len(img_paths) < 1 and img_only:
@@ -470,7 +477,7 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
                     'images': img_paths # Pass the path string or bytes directly
                 }]
             )
-            label = response.message.content
+            label = response["message"]["content"]
             label = re.sub(r'[\\/*?:"<>|]', "", label)
             return label if label else "Unlabeled_Cluster"
     except Exception as e:
@@ -479,7 +486,7 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
 
 
 # --- Core Orchestration & Recursive Processing ---
-def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = False, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     global processor, llm
     if not groups_final:
         return {}
@@ -488,7 +495,8 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=
     print(msg)
     if status_callback: status_callback(msg)
     
-    load_llm()
+    if not online:
+        load_llm()
 
     # Helpers to support both raw dictionaries and sorted list-of-tuples representations
     def is_leaf_node(node):
@@ -613,19 +621,20 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=
                         f"You are an expert data cataloger. Review the following text snippets and images from a group of files "
                         f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
                         f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
-                        f"and return ONLY the label.\n\nCluster Content:\n{text_context}\nTopic Label:"
+                        f"and return ONLY the label. \nIf you are unsure, just return 'Unlabeled_Cluster'."
+                        f"\nCluster Content:\n{text_context}\nTopic Label:"
                     )
                 else:
                     prompt = (
                         f"You are an expert data cataloger. Review the following images from a group of files "
                         f"that belong to the same semantic cluster. Based on their actual content, generate a highly "
                         f"concise, precise 2-to-4 word topic label. Do not include introductory text, do not use quotes, "
-                        f"and return ONLY the label.\nTopic Label:"
+                        f"and return ONLY the label.\nIf you are unsure, just return 'Unlabeled_Cluster'. \nTopic Label:"
                     )
 
-                label = generate_llm_label(prompt, img_context, img_only=img_only, check_cancel=check_cancel)
+                label = generate_llm_label(prompt, img_context, online=online, img_only=img_only, check_cancel=check_cancel)
                 if not label or label == "Unlabeled_Cluster":
-                    label = f"Cluster_{lab}"
+                    label = f"Folder_{lab}"
 
             finally:
                 if os.path.exists(temp_img_dir):
@@ -664,7 +673,7 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, status_callback=
                 f"and return ONLY the label.\n\nSub-directories:\n{children_str}\nParent Directory Label:"
             )
 
-            parent_label = generate_llm_label(parent_prompt, check_cancel=check_cancel)
+            parent_label = generate_llm_label(parent_prompt, online=online, check_cancel=check_cancel)
             if not parent_label or parent_label == "Unlabeled_Cluster":
                 parent_label = f"Folder_{lab}"
 

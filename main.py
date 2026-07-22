@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import ttk
-from tkinter import scrolledtext
 from PIL import Image, ImageTk
 import os
 import platform
@@ -9,11 +8,15 @@ import subprocess
 import threading 
 import time
 
-from fileSort import file_sort_init, SemanticClustering, AutoLabelClusters, MoveFiles
+from file_sort import file_sort_init, SemanticClustering, AutoLabelClusters, MoveFiles
 
 selected_path = None
 worker = None 
-is_cancelled = False 
+is_cancelled = False
+
+# DEFAULT SETTINGS
+use_online_llm = False
+recursive_sorting = True 
 
 ## File and Directory Functions
 def display_files_in_dir(selected_dir: str):
@@ -117,7 +120,7 @@ def sorting_thread_worker(current_dir):
     try:
         # Step 1: Semantic Clustering
         clusters = SemanticClustering(
-            current_dir, 
+            current_dir, recursive=recursive_sorting,
             status_callback=update_status_console, 
             progress_callback=update_progress_bar,
             check_cancel=check_cancel_status
@@ -126,7 +129,8 @@ def sorting_thread_worker(current_dir):
         # Step 2: Dynamic Auto-Labelling
         if clusters:
             labeled_clusters = AutoLabelClusters(
-                current_dir, clusters, 
+                current_dir, clusters,
+                online = use_online_llm, 
                 status_callback=update_status_console, 
                 progress_callback=update_progress_bar,
                 check_cancel=check_cancel_status
@@ -261,18 +265,49 @@ if __name__ == "__main__":
     page1.rowconfigure(1, weight=0)
     page1.columnconfigure(0, weight=1)
 
+    # OPTIONS PANEL
+    options_panel = ttk.Frame(page1)
+    options_panel.grid(row=0, column=0, sticky="w", pady=5)
+    # Button to select whether to use online model on Ollama
+
+    def toggle_online():
+        global use_online_llm
+        use_online_llm = not use_online_llm
+
+    online_toggle_btn = tk.Checkbutton(
+        options_panel, 
+        text="Use Gemma4:cloud (Ollama)", 
+        variable=use_online_llm, 
+        command=toggle_online
+    )
+    online_toggle_btn.pack(side="top", anchor="w")
+    # Button to select whether to use recursive sorting
+    def toggle_recursive():
+        global recursive_sorting
+        recursive_sorting = not recursive_sorting
+
+    recursive_toggle_btn = tk.Checkbutton(
+        options_panel, 
+        text="Create no subdirectories", 
+        variable=recursive_sorting, 
+        command=toggle_recursive
+    )
+    recursive_toggle_btn.pack(side="top", anchor="w")
+
+    # PROGRESS BAR
     progress_label = ttk.Label(page1, text="Sorting Progress Indicator:")
-    progress_label.grid(row=0, column=0, sticky="w", pady=(10, 2))
+    progress_label.grid(row=1, column=0, sticky="w", pady=(10, 2))
 
     progress_bar = ttk.Progressbar(page1, orient="horizontal", mode="determinate")
-    progress_bar.grid(row=1, column=0, sticky="ew", pady=5)
+    progress_bar.grid(row=2, column=0, sticky="ew", pady=5)
 
     status_text = ttk.Label(page1, text="", font=("Consolas", 9))
-    status_text.grid(row=2, column=0, sticky="ew",pady=5)
+    status_text.grid(row=3, column=0, sticky="ew",pady=5)
     status_text.bind("<Configure>", auto_wrap)
 
+    # BUTTONS PANEL
     btn_panel = ttk.Frame(page1)
-    btn_panel.grid(row=3, column=0, sticky="ew", pady=5)
+    btn_panel.grid(row=4, column=0, sticky="ew", pady=5)
     sort_btn = tk.Button(btn_panel, text="Sort", command=semantic_file_sort, width=8, font=("Arial", 11))
     sort_btn.pack(side=tk.LEFT)
     cancel_btn = tk.Button(btn_panel, text="Cancel", command=cancel_file_sort, width=8, font=("Arial", 11), state=tk.DISABLED)
