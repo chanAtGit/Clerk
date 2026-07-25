@@ -91,13 +91,16 @@ def convert_pdf_to_img(pdf_path: str):
         images = convert_from_path(pdf_path)
     return images
 
+def cache_init():
+    global cache
+    if cache is None:
+        cache = Cache('my-cache', limit=1000, evict='lru')
+
 def load_embedding_model():
-    global embedding_model, cache
+    global embedding_model
     if embedding_model is None:
         print("Loading embedding model into VRAM...")
         embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
-    if cache is None:
-        cache = Cache('my-cache', limit=1000, evict='lru')
         # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
 
 def unload_embedding_model():
@@ -186,7 +189,8 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
 
     mean_embeddings = {}
     total_files = len(files_list)
-
+    cache_init()
+    
     for idx, file_name in enumerate(files_list):
         if check_cancel and check_cancel():
             raise InterruptedError()
@@ -205,6 +209,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         
         # If the cache misses
         if mean_embedding is None:
+            load_embedding_model() # only load model if cache miss
             # generate mean embedding
             match Path(file_path).suffix.lower():
                 case '.pdf':
@@ -224,6 +229,25 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
             progress_callback(int(((idx + 1) / total_files) * 50))
 
     if len(mean_embeddings) == 0:
+        return None
+    
+    return mean_embeddings
+
+def get_directory_mean_embeddings(subdirectories: list) -> dict:
+    # Find all subdirectories in the target directory
+    if len(subdirectories) == 0:
+        print("No subdirectories found. Exiting.")
+        return None
+
+    load_embedding_model()
+    mean_embeddings = {} # a dictionary with elements in the key-value format of {file_name: mean_embedding}
+
+    for dir_name in subdirectories:
+        mean_embeddings[dir_name] = embedding_model.encode(str(dir_name), convert_to_numpy=True)
+
+    # Ensure we have processed at least some data
+    if len(mean_embeddings) == 0:
+        print("No embeddings were generated. Exiting.")
         return None
     
     return mean_embeddings

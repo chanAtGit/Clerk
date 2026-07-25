@@ -16,10 +16,11 @@ from sklearn.cluster import AgglomerativeClustering
 # from langchain_text_splitters import RecursiveCharacterTextSplitter
 # from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 from PIL import Image
+from collections import defaultdict
 # from docx2pdf import convert
 # from pdf2image import convert_from_path
 
-from file_embeddings import embeddings_init, clear_vram, get_file_mean_embeddings, load_embedding_model, unload_embedding_model, get_file_sample
+from file_embeddings import embeddings_init, clear_vram, get_file_mean_embeddings, get_directory_mean_embeddings, unload_embedding_model, get_file_sample
 
 # --- Configuration ---
 processor = None
@@ -142,13 +143,12 @@ def insert_groups_dict(groups: dict, lab: str, file_name: str):
         groups[current_key].append(file_name)
 
 def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+    '''Group files into semantic clusters using VL embedding model and hierarchical clustering'''
     if check_cancel and check_cancel(): raise InterruptedError()
     files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
     if not files_list:
         if status_callback: status_callback("No files found to cluster.")
         return None
-    
-    load_embedding_model()
     
     try:
         file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
@@ -192,6 +192,51 @@ def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None,
         # Guarantee the embedding model unloads even if user cancels
         unload_embedding_model()
 
+
+def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+    '''Sort files into existing folders in the given directory'''
+    if check_cancel and check_cancel(): raise InterruptedError()
+
+    files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
+    if not files_list:
+        if status_callback: status_callback("No files found.")
+        return None
+
+    dir_list = [f for f in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, f))]
+    if not dir_list:
+        if status_callback: status_callback("No directories found.")
+        return None
+
+    try:
+        file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        file_embeddings = np.array(list(file_embeddings_dict.values()))
+
+        if check_cancel and check_cancel(): raise InterruptedError()
+
+        dir_embeddings_dict = get_directory_mean_embeddings(dir_list)
+        dir_embeddings = np.array(list(dir_embeddings_dict.values()))
+
+        # normalise each embedding 
+        file_embeddings = file_embeddings / np.linalg.norm(file_embeddings, axis=1, keepdims=True)
+        dir_embeddings = dir_embeddings / np.linalg.norm(dir_embeddings, axis=1, keepdims=True)
+
+        similarity_matrix = np.dot(file_embeddings, dir_embeddings.T) # get cosine similarity matrix (number of files * number of directories)
+        max_sim_ind = np.argmax(similarity_matrix, axis = 1) # index of most cosine similar directory per file
+        max_sim = np.max(similarity_matrix, axis = 1)
+
+        file_names = list(file_embeddings_dict.keys())
+        dir_names = list(dir_embeddings_dict.keys())
+        dir_file_dict = defaultdict(list)
+        for i in range(len(file_names)):
+            if max_sim[i] < 0.2: # the lower threshold of cosine similarity is 0.2
+                continue
+            dir_file_dict[dir_names[max_sim_ind[i]]].append(file_names[i])
+
+        print(f"Max sim: {np.max(max_sim)}, Min sim: {np.min(max_sim)}")
+
+        return dir_file_dict
+    finally:
+        unload_embedding_model()
 
 # --- Helper 2: LLM Inference Sequence ---
 def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False, img_only:bool = False, check_cancel=None) -> str:
@@ -471,12 +516,24 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = Fa
     finally:
         unload_llm()
 
+def print_groups(groups_final: dict, num_of_indents:int = 0):
+    for folder in groups_final.keys():
+        print(" " * num_of_indents + f"Folder: {folder}")
+        if isinstance(groups_final[folder], list):
+            for files in groups_final[folder]:
+                print(" " * num_of_indents + f"+ {files}")
+        elif isinstance(groups_final[folder], dict):
+            print_groups(groups_final[folder], num_of_indents = num_of_indents + 4)
+        print()
+
 def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, status_callback=None, progress_callback=None, check_cancel=None):
+    '''Move files into folders given a dictionary object'''
     if not groups_final:
         return
     
     if not subdir_path: # initial call
         subdir_path = rootdir_path
+        print_groups(groups_final)
 
     total_labels = len(groups_final)
     for idx, lab in enumerate(groups_final.keys()):

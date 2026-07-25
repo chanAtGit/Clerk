@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from PIL import Image, ImageTk
 
-from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering
+from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders
 
 
 class GUI:
@@ -24,7 +24,8 @@ class GUI:
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
-        self.recursive_sorting = tk.BooleanVar(value=True)
+        self.singular_sorting = tk.BooleanVar(value=False)
+        self.generate_folder = tk.BooleanVar(value=True)
 
         # Main Grid Configuration
         self.root.rowconfigure(0, weight=0)
@@ -136,6 +137,24 @@ class GUI:
         options_panel = ttk.Frame(self.page1)
         options_panel.grid(row=0, column=0, sticky="w", pady=5)
 
+        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Helvetica", 10, "bold"))
+        mode_label.pack(anchor="w")
+        rb1 = tk.Radiobutton(
+                options_panel,
+                text="Generate and sort into new folders",
+                variable=self.generate_folder,
+                value=True
+            )
+        
+        rb2 = tk.Radiobutton(
+                options_panel,
+                text="Sort into existing folders",
+                variable=self.generate_folder,
+                value=False
+            )
+        rb1.pack(anchor="w", padx=20)
+        rb2.pack(anchor="w", padx=20)
+
         online_toggle_btn = tk.Checkbutton(
             options_panel,
             text="Use Gemma4:cloud (Ollama)",
@@ -146,7 +165,7 @@ class GUI:
         recursive_toggle_btn = tk.Checkbutton(
             options_panel,
             text="Create no subdirectories",
-            variable=self.recursive_sorting,
+            variable=self.singular_sorting,
         )
         recursive_toggle_btn.pack(side="top", anchor="w")
 
@@ -298,29 +317,39 @@ class GUI:
         start_time = time.perf_counter()
         try:
             # Step 1: Semantic Clustering
-            clusters = SemanticClustering(
-                current_dir,
-                recursive=self.recursive_sorting.get(),
-                status_callback=self.update_status_console,
-                progress_callback=self.update_progress_bar,
-                check_cancel=self.check_cancel_status,
-            )
-
-            # Step 2: Dynamic Auto-Labelling
-            if clusters:
-                labeled_clusters = AutoLabelClusters(
+            if self.generate_folder.get(): # the sorting method generates folders and move files into them
+                groups = SemanticClustering(
                     current_dir,
-                    clusters,
-                    online=self.use_online_llm.get(),
+                    recursive=not self.singular_sorting.get(),
+                    status_callback=self.update_status_console,
+                    progress_callback=self.update_progress_bar,
+                    check_cancel=self.check_cancel_status,
+                )
+            else: # the sorting method moves files into existing folders
+                groups = SortIntoFolders(
+                    current_dir,
                     status_callback=self.update_status_console,
                     progress_callback=self.update_progress_bar,
                     check_cancel=self.check_cancel_status,
                 )
 
+            # Step 2: Dynamic Auto-Labelling
+            if groups:
+                if self.generate_folder.get():
+                    # Only the method which generates folders require the LLM to name the new folders
+                    groups = AutoLabelClusters(
+                        current_dir,
+                        groups,
+                        online=self.use_online_llm.get(),
+                        status_callback=self.update_status_console,
+                        progress_callback=self.update_progress_bar,
+                        check_cancel=self.check_cancel_status,
+                    )
+
                 # Step 3: Organise Files
                 MoveFiles(
                     current_dir,
-                    labeled_clusters,
+                    groups,
                     status_callback=self.update_status_console,
                     progress_callback=self.update_progress_bar,
                     check_cancel=self.check_cancel_status,
@@ -357,7 +386,7 @@ class GUI:
 
         self.worker = threading.Thread(
             target=self.sorting_thread_worker, args=(current_dir,), daemon=True
-        )
+        ) # Non blocking thread to keep GUI
         self.worker.start()
 
     def cancel_file_sort(self):
