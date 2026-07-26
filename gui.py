@@ -350,6 +350,7 @@ class GUI:
                 MoveFiles(
                     current_dir,
                     groups,
+                    sort_into_existing= not self.generate_folder.get(),
                     status_callback=self.update_status_console,
                     progress_callback=self.update_progress_bar,
                     check_cancel=self.check_cancel_status,

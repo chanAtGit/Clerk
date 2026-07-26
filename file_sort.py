@@ -1,24 +1,18 @@
 import os
-# import platform
 import shutil
 import torch
-# import gc
+import math
 import numpy as np
 import re
 import ollama
-# from diskcache import Cache # for caching mean embeddings
 from pathlib import Path
 from huggingface_hub import login
 from transformers import AutoProcessor, AutoModelForMultimodalLM
-# from sentence_transformers import SentenceTransformer
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import AgglomerativeClustering
-# from langchain_text_splitters import RecursiveCharacterTextSplitter
-# from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
+from sklearn.decomposition import PCA
 from PIL import Image
 from collections import defaultdict
-# from docx2pdf import convert
-# from pdf2image import convert_from_path
 
 from file_embeddings import embeddings_init, clear_vram, get_file_mean_embeddings, get_directory_mean_embeddings, unload_embedding_model, get_file_sample
 
@@ -57,7 +51,8 @@ def file_sort_init():
 
 def optimal_clustering(embeddings:list, recursive:bool=True, status_callback = None) -> list:
     THRESHOLD = 0.45
-    data = np.array(embeddings)
+    pca = PCA(n_components = min(6, len(embeddings)), random_state=42)
+    data = pca.fit_transform(np.array(embeddings))
     cluster_values = np.arange(1, int(data.shape[0]))
     
     best_clusters = None
@@ -220,16 +215,24 @@ def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None,
         file_embeddings = file_embeddings / np.linalg.norm(file_embeddings, axis=1, keepdims=True)
         dir_embeddings = dir_embeddings / np.linalg.norm(dir_embeddings, axis=1, keepdims=True)
 
-        similarity_matrix = np.dot(file_embeddings, dir_embeddings.T) # get cosine similarity matrix (number of files * number of directories)
-        max_sim_ind = np.argmax(similarity_matrix, axis = 1) # index of most cosine similar directory per file
-        max_sim = np.max(similarity_matrix, axis = 1)
+        def softmax(x):
+            x_exp = np.exp(x - np.max(x, axis=-1, keepdims=True))
+            x_exp = x_exp / np.sum(x_exp, axis=-1, keepdims=True)
+            x_exp = np.round(x_exp, decimals=2) # round the softmax probability to 2 decimal places
+            return x_exp
+        
+        similarity_matrix = softmax(np.dot(file_embeddings, dir_embeddings.T)) # get softmax matrix with cosine similarity as logit (number of files * number of directories)
+        max_sim_ind = np.argmax(similarity_matrix, axis = 1) # index of most probable directory per file
+        max_sim = np.max(similarity_matrix, axis = 1) # get maximum probability per file (number of files * 1)
+        max_counts = np.sum(similarity_matrix == max_sim.reshape(-1,1), axis=1) # Count how many times the maximum value appears in each row
+        max_sim_ind = np.where(max_counts > 1, -1, max_sim_ind) # If count is greater than 1, replace index with -1
 
         file_names = list(file_embeddings_dict.keys())
         dir_names = list(dir_embeddings_dict.keys())
         dir_file_dict = defaultdict(list)
         for i in range(len(file_names)):
-            if max_sim[i] < 0.2: # the lower threshold of cosine similarity is 0.2
-                continue
+            if max_sim_ind[i] == -1: # if the maximum probability has appeared twice (correspond to more than 1 directory)
+                continue # skip
             dir_file_dict[dir_names[max_sim_ind[i]]].append(file_names[i])
 
         print(f"Max sim: {np.max(max_sim)}, Min sim: {np.min(max_sim)}")
@@ -516,26 +519,40 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = Fa
     finally:
         unload_llm()
 
-def print_groups(groups_final: dict, num_of_indents:int = 0):
+def print_groups(groups_final: dict, num_of_indents:int = 0, sort_into_existing:bool = False):
+    misc_files = []
     for folder in groups_final.keys():
-        print(" " * num_of_indents + f"Folder: {folder}")
         if isinstance(groups_final[folder], list):
+            if not sort_into_existing and len(groups_final[folder]) == 1: # if the folder only contains 1 file, the file is moved to the misc files
+                misc_files.append(groups_final[folder][0])
+                continue
+
+            print(" " * num_of_indents + f"Folder: {folder}")
             for files in groups_final[folder]:
                 print(" " * num_of_indents + f"+ {files}")
+            print()
         elif isinstance(groups_final[folder], dict):
+            print(" " * num_of_indents + f"Folder: {folder}")
             print_groups(groups_final[folder], num_of_indents = num_of_indents + 4)
+
+    # Print files in Misc Folder
+    if not sort_into_existing and misc_files:
+        print(" " * num_of_indents + f"Folder: Misc")
+        for files in misc_files:
+            print(" " * num_of_indents + f"+ {files}")
         print()
 
-def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, status_callback=None, progress_callback=None, check_cancel=None):
+def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sort_into_existing:bool = False, status_callback=None, progress_callback=None, check_cancel=None):
     '''Move files into folders given a dictionary object'''
     if not groups_final:
         return
     
     if not subdir_path: # initial call
         subdir_path = rootdir_path
-        print_groups(groups_final)
+        print_groups(groups_final, sort_into_existing=sort_into_existing)
 
     total_labels = len(groups_final)
+    misc_files = []
     for idx, lab in enumerate(groups_final.keys()):
         if check_cancel and check_cancel(): raise InterruptedError()
 
@@ -555,6 +572,11 @@ def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sta
 
         elif isinstance(groups_final[lab], list): # Current label is a leaf directory
             files = groups_final[lab]
+
+            # The generation of a Misc folder is only exclusive to the sorting mode with generating new folder
+            if not sort_into_existing and len(files) == 1:
+                misc_files.append(files[0]) # add to misc_files
+                continue # skip this lead directory
             
             os.makedirs(cluster_dir, exist_ok=True)
 
@@ -569,6 +591,21 @@ def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sta
                     msg = f"Error moving {item} to {lab}: {e}"
                     print(msg)
                     if status_callback: status_callback(msg)
-                
+
         if progress_callback:
             progress_callback(int(90 + ((idx + 1) / total_labels) * 10))
+
+    if not sort_into_existing and len(misc_files) > 0:
+        misc_dir = os.path.join(subdir_path, "Misc")
+        os.makedirs(misc_dir, exist_ok=True)
+        for item in misc_files:
+            if check_cancel and check_cancel(): raise InterruptedError()
+            src_path = os.path.join(rootdir_path, item)
+            dest_path = os.path.join(misc_dir, item)
+            try:
+                if os.path.exists(src_path):
+                    os.rename(src_path, dest_path)
+            except Exception as e:
+                msg = f"Error moving {item} to Misc: {e}"
+                print(msg)
+                if status_callback: status_callback(msg)
