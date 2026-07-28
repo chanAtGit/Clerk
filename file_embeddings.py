@@ -93,15 +93,21 @@ def convert_pdf_to_img(pdf_path: str):
 
 def cache_init():
     global cache
+    # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
     if cache is None:
-        cache = Cache('my-cache', limit=1000, evict='lru')
+        cache = Cache('embedding-cache', limit=1000, evict='lru')
 
 def load_embedding_model():
     global embedding_model
+    local_path = "models/qwen3-vl-embedding-2b"
     if embedding_model is None:
         print("Loading embedding model into VRAM...")
-        embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
-        # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
+        if os.path.exists(local_path):
+            print("Loading local model...")
+            embedding_model = SentenceTransformer(local_path, device="cuda", local_files_only=True)
+        else:
+            embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
+            embedding_model.save("models/qwen3-vl-embedding-2b")
 
 def unload_embedding_model():
     global embedding_model, cache

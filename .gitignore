@@ -1,5 +1,6 @@
 .venv
 __pycache__
-my-cache
+embedding-cache
+models
 tests
 poppler-26.02.0

@@ -20,13 +20,42 @@ from file_embeddings import embeddings_init, clear_vram, get_file_mean_embedding
 processor = None
 llm = None  
 
+import os
+import torch
+from transformers import AutoProcessor, AutoModelForMultimodalLM
+
+# Global variable declarations
+processor = None
+llm = None
+
 def load_llm():
     global processor, llm
     if llm is None:
-        print("Loading LLM into VRAM...")
         model_id = "google/gemma-4-E2B-it"
-        processor = AutoProcessor.from_pretrained(model_id)
-        llm = AutoModelForMultimodalLM.from_pretrained(model_id, dtype=torch.bfloat16).to("cuda")
+        local_dir = "models/gemma-4-E2B-it"
+
+        # Check if the model has already been saved locally
+        if os.path.exists(local_dir):
+            print(f"Loading LLM offline from '{local_dir}'...")
+            processor = AutoProcessor.from_pretrained(local_dir)
+            llm = AutoModelForMultimodalLM.from_pretrained(
+                local_dir, 
+                dtype=torch.bfloat16,
+                local_files_only=True
+            ).to("cuda")
+        else:
+            print(f"Downloading LLM from Hugging Face ({model_id})...")
+            processor = AutoProcessor.from_pretrained(model_id)
+            llm = AutoModelForMultimodalLM.from_pretrained(
+                model_id, 
+                dtype=torch.bfloat16
+            )
+            
+            print(f"Saving model and processor locally to '{local_dir}'...")
+            processor.save_pretrained(local_dir)
+            llm.save_pretrained(local_dir)
+            
+            llm = llm.to("cuda")
 
 def unload_llm():
     global processor, llm
@@ -47,7 +76,10 @@ def file_sort_init():
         
     embeddings_init()
 
-    login(token=huggingface_token)
+    try:
+        login(token=huggingface_token)
+    except Exception as e:
+        print(f"Error encountered when logging into huggingface: {e}. Using offline mode.")
 
 def optimal_clustering(embeddings:list, recursive:bool=True, status_callback = None) -> list:
     THRESHOLD = 0.45
@@ -247,7 +279,6 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
     global processor, llm
     try:
         if not online:
-            print("Local Inference")
             content_list = []
             loaded_images = []
             
