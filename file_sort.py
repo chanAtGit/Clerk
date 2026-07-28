@@ -1,7 +1,7 @@
 import os
 import shutil
 import torch
-import math
+import tkinter as tk
 import numpy as np
 import re
 import ollama
@@ -519,7 +519,7 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = Fa
     finally:
         unload_llm()
 
-def print_groups(groups_final: dict, num_of_indents:int = 0, sort_into_existing:bool = False):
+def print_groups(groups_final: dict, num_of_indents:int = 0, sort_into_existing:bool = False, print_to_widget = None):
     misc_files = []
     for folder in groups_final.keys():
         if isinstance(groups_final[folder], list):
@@ -527,20 +527,32 @@ def print_groups(groups_final: dict, num_of_indents:int = 0, sort_into_existing:
                 misc_files.append(groups_final[folder][0])
                 continue
 
-            print(" " * num_of_indents + f"Folder: {folder}")
+            # print(" " * num_of_indents + f"Folder: {folder}")
+            if print_to_widget: print_to_widget(" " * num_of_indents + f"Folder: {folder}")
+
             for files in groups_final[folder]:
-                print(" " * num_of_indents + f"+ {files}")
-            print()
+                # print(" " * num_of_indents + f"+ {files}")
+                if print_to_widget: print_to_widget(" " * num_of_indents + f"➔ {files}")
+
+            # print()
+            if print_to_widget: print_to_widget('')
         elif isinstance(groups_final[folder], dict):
-            print(" " * num_of_indents + f"Folder: {folder}")
-            print_groups(groups_final[folder], num_of_indents = num_of_indents + 4)
+            # print(" " * num_of_indents + f"Folder: {folder}")
+            if print_to_widget: print_to_widget(" " * num_of_indents + f"Folder: {folder}")
+
+            print_groups(groups_final[folder], num_of_indents + 4, sort_into_existing, print_to_widget)
 
     # Print files in Misc Folder
     if not sort_into_existing and misc_files:
-        print(" " * num_of_indents + f"Folder: Misc")
+        # print(" " * num_of_indents + f"Folder: Misc")
+        if print_to_widget: print_to_widget(" " * num_of_indents + f"Folder: Misc")
+
         for files in misc_files:
-            print(" " * num_of_indents + f"+ {files}")
-        print()
+            # print(" " * num_of_indents + f"+ {files}")
+            if print_to_widget: print_to_widget(" " * num_of_indents + f"➔ {files}")
+
+        # print()
+        if print_to_widget: print_to_widget('')
 
 def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sort_into_existing:bool = False, status_callback=None, progress_callback=None, check_cancel=None):
     '''Move files into folders given a dictionary object'''
@@ -549,7 +561,6 @@ def MoveFiles(rootdir_path: str, groups_final: dict, subdir_path:str = None, sor
     
     if not subdir_path: # initial call
         subdir_path = rootdir_path
-        print_groups(groups_final, sort_into_existing=sort_into_existing)
 
     total_labels = len(groups_final)
     misc_files = []

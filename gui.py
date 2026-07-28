@@ -4,10 +4,11 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+from tkinter import scrolledtext
 from tkinter import filedialog, ttk
 from PIL import Image, ImageTk
 
-from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders
+from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
 
 
 class GUI:
@@ -303,6 +304,61 @@ class GUI:
             else:
                 subprocess.Popen(["xdg-open", filename])
 
+    def open_confirm_popup(self, groups: dict) -> bool:
+        """Display where the files will be sorted and allow user to confirm or reject."""
+        # 1. Create a new top-level window
+        popup = tk.Toplevel(self.root)
+        popup.title("Confirm sorting")
+        popup.geometry("450x450")
+
+        result = False
+
+        def confirm_sorting():
+            nonlocal result
+            result = True
+            popup.destroy()
+
+        def reject_sorting():
+            nonlocal result
+            result = False
+            popup.destroy()
+
+        # 2. Header
+        title = tk.Label(popup, text="Sorting result", font=("Arial", 12, "bold"))
+        title.pack(pady=(15, 5))
+
+        # 3. Button frame placed at the bottom FIRST
+        btn_frame = tk.Frame(popup)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
+
+        confirm_btn = tk.Button(btn_frame, text="Confirm", width=12, command=confirm_sorting)
+        confirm_btn.pack(side=tk.LEFT, padx=40)
+
+        reject_btn = tk.Button(btn_frame, text="Reject", width=12, command=reject_sorting)
+        reject_btn.pack(side=tk.RIGHT, padx=40)
+
+        # 4. Text widget filling remaining space (measured in lines/chars, not pixels)
+        sorting_info = scrolledtext.ScrolledText(popup, height=20, width=65, font=("Arial", 10), wrap=tk.WORD)
+        sorting_info.pack(padx=15, pady=10, fill=tk.BOTH, expand=True)
+
+        def print_line(msg: str):
+            sorting_info.insert(tk.END, f"{msg}\n")
+
+        print_groups(
+            groups,
+            sort_into_existing=not self.generate_folder.get(),
+            print_to_widget=print_line
+        )
+
+        # Make text box uneditable
+        sorting_info.config(state="disabled") 
+
+        # 5. Control window behavior
+        popup.grab_set()
+        popup.wait_window(popup)
+
+        return result
+
     # --- Thread-Safe Updates & Worker Logic ---
     def update_status_console(self, text):
         self.root.after(0, lambda: self.status_text.config(text=text))
@@ -347,14 +403,19 @@ class GUI:
                     )
 
                 # Step 3: Organise Files
-                MoveFiles(
-                    current_dir,
-                    groups,
-                    sort_into_existing= not self.generate_folder.get(),
-                    status_callback=self.update_status_console,
-                    progress_callback=self.update_progress_bar,
-                    check_cancel=self.check_cancel_status,
-                )
+
+                # Open the custom popup to inform the user about the sorting process
+                confirm: bool = self.open_confirm_popup(groups)
+                
+                if confirm:
+                    MoveFiles(
+                        current_dir,
+                        groups,
+                        sort_into_existing= not self.generate_folder.get(),
+                        status_callback=self.update_status_console,
+                        progress_callback=self.update_progress_bar,
+                        check_cancel=self.check_cancel_status,
+                    )
                 end_time = time.perf_counter()
                 elapsed_time = end_time - start_time
                 minutes, seconds = divmod(elapsed_time, 60)
