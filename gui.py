@@ -99,35 +99,9 @@ class GUI:
 
         scrollbar.config(command=self.file_listbox.yview)
 
-    def _build_right_frame(self):
-        # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, AND CLERKBOT)
-        right_container = ttk.Frame(self.root)
-        right_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
-        right_container.rowconfigure(1, weight=1)
-        right_container.columnconfigure(0, weight=1)
-
-        # --- Top Navigation Frame ---
-        nav_frame = ttk.Frame(right_container)
-        nav_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-
-        btn_page1 = ttk.Button(
-            nav_frame, text="File Sort", command=lambda: self.page1.tkraise()
-        )
-        btn_page1.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-
-        btn_page2 = ttk.Button(
-            nav_frame, text="ClerkBot", command=lambda: self.page2.tkraise()
-        )
-        btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
-
-        # --- Pages Container ---
-        pages_container = ttk.Frame(right_container)
-        pages_container.grid(row=1, column=0, sticky="nsew")
-        pages_container.rowconfigure(0, weight=1)
-        pages_container.columnconfigure(0, weight=1)
-
-        # --- Page 1: File Sort ---
-        self.page1 = ttk.Frame(pages_container, relief="ridge", padding=10)
+    def _build_sorting_page(self, parent_container):
+        '''Build the sorting page'''
+        self.page1 = ttk.Frame(parent_container, relief="groove", padding=10)
         self.page1.grid(row=0, column=0, sticky="nsew")
         self.page1.grid_propagate(False)
         self.page1.rowconfigure(0, weight=0)
@@ -206,12 +180,135 @@ class GUI:
         )
         self.cancel_btn.pack(side=tk.RIGHT)
 
-        # --- Page 2: ClerkBot Barebones ---
-        self.page2 = ttk.Frame(pages_container, relief="ridge", padding=10)
+    def _build_sidebar(self, parent_container):
+        self.sidebar_frame = ttk.Frame(
+            parent_container, width=250, relief="solid", padding=10
+        )
+        
+        tk.Button(self.sidebar_frame, text="💬 New Chat", font=("Arial", 12, "bold")).pack(
+            fill=tk.X, pady=2
+        )
+
+        sidebar_title = ttk.Label(
+            self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
+        )
+        sidebar_title.pack(anchor="w", pady=(20,0))
+
+        ttk.Button(self.sidebar_frame, text="Placeholder Chat").pack(
+            fill=tk.X, pady=2
+        )
+
+    def _build_clerkbot_page(self, parent_container):
+        """Build ClerkBot (Chatbot) page"""
+        self.page2 = ttk.Frame(parent_container, relief="groove", padding=10)
         self.page2.grid(row=0, column=0, sticky="nsew")
 
-        clerkbot_label = tk.Label(self.page2, text="ClerkBot", font=("Arial", 16))
-        clerkbot_label.pack(expand=True)
+        self.sidebar_visible = False
+
+        # --- Top Header Bar ---
+        top_bar = ttk.Frame(self.page2)
+        top_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        # Menu Toggle Button
+        self.sidebar_btn = ttk.Button(
+            top_bar, text="☰", width=8, command=self._toggle_sidebar
+        )
+        self.sidebar_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Title Label
+        clerkbot_label = tk.Label(
+            top_bar, text="ClerkBot", font=("Arial", 16, "bold")
+        )
+        clerkbot_label.pack(side=tk.LEFT)
+
+        # --- Body Area Container ---
+        body_container = ttk.Frame(self.page2)
+        body_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # --- Main Content Area - Chat Zone ---
+        chat_frame = ttk.Frame(body_container)
+        chat_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 1. Pack bottom input frame FIRST so it anchors to the bottom space
+        user_input_frame = ttk.Frame(chat_frame)
+        user_input_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+        self.input_btn = tk.Button(user_input_frame, text="⌯⌲", font=("Arial", 14))
+        self.input_btn.pack(side=tk.RIGHT)
+
+        self.chat_input = tk.Text(
+                    user_input_frame, 
+                    height=3, 
+                    padx=10,
+                    pady=10,
+                    font=("Arial", 11)
+                    )
+        self.chat_input.pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
+        )  # expand=True lets text box fill width
+
+        # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
+        self.chat_content = scrolledtext.ScrolledText(
+            chat_frame,
+            height=10,  # Lower baseline height request so it fits small windows
+            width=30,
+            padx=10,
+            pady=10,
+            font=("Arial", 12),
+            wrap=tk.WORD,
+        )
+        self.chat_content.pack(fill=tk.BOTH, expand=True)
+
+        # --- Overlay Sidebar Frame ---
+        # Note: Do NOT pack or grid this frame! It will be placed dynamically.
+        self._build_sidebar(body_container)
+
+    def _toggle_sidebar(self):
+        """Show or hide the sidebar overlay using place()"""
+        if self.sidebar_visible:
+            # Unmap from screen without destroying
+            self.sidebar_frame.place_forget()
+            self.sidebar_visible = False
+        else:
+            # Float on top at x=-10, y=0, matching 100% height of body_container
+            self.sidebar_frame.place(x=-10, y=0, relheight=1.0, width=250)
+
+            # Lift the sidebar to the top of the z-index stack
+            self.sidebar_frame.lift()
+            self.sidebar_visible = True
+            
+    def _build_right_frame(self):
+        # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, AND CLERKBOT)
+        right_container = ttk.Frame(self.root)
+        right_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
+        right_container.rowconfigure(1, weight=1)
+        right_container.columnconfigure(0, weight=1)
+
+        # --- Top Navigation Frame ---
+        nav_frame = ttk.Frame(right_container)
+        nav_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+
+        btn_page1 = ttk.Button(
+            nav_frame, text="File Sort", command=lambda: self.page1.tkraise()
+        )
+        btn_page1.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+
+        btn_page2 = ttk.Button(
+            nav_frame, text="ClerkBot", command=lambda: self.page2.tkraise()
+        )
+        btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+
+        # --- Pages Container ---
+        pages_container = ttk.Frame(right_container)
+        pages_container.grid(row=1, column=0, sticky="nsew")
+        pages_container.rowconfigure(0, weight=1)
+        pages_container.columnconfigure(0, weight=1)
+
+        # --- Page 1: File Sort ---
+        self._build_sorting_page(pages_container)
+
+        # --- Page 2: ClerkBot Barebones ---
+        self._build_clerkbot_page(pages_container)
 
         self.page1.tkraise()
 
