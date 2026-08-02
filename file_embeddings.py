@@ -1,10 +1,7 @@
 import os
 import platform
-import gc
-import torch
 import re, unicodedata
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from diskcache import Cache # for caching mean embeddings
 from pathlib import Path
@@ -14,8 +11,10 @@ from pdf2image import convert_from_path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 
+from model_commons import load_embedding_model, embedding_encode
+
+EMBEDDING_MODEL_NAME = "Qwen/Qwen3-VL-Embedding-2B"
 poppler_path = None
-embedding_model = None 
 cache = None 
 
 text_splitter = RecursiveCharacterTextSplitter(
@@ -25,15 +24,14 @@ text_splitter = RecursiveCharacterTextSplitter(
 
 def embeddings_init():
     global poppler_path
+    global cache
     poppler_path = os.getenv("POPPLER_PATH")
 
     if not poppler_path and platform.system() != 'Linux': # only linux has poppler automatically installed
         raise ValueError("POPPLER_PATH environment variable is not set.")
-
-def clear_vram():
-    """Forces Python garbage collection and clears PyTorch CUDA cache."""
-    gc.collect()
-    torch.cuda.empty_cache()
+        # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
+    if cache is None:
+        cache = Cache('embedding-cache', limit=1000, evict='lru')
 
 def get_file_id(file_path: str):
     # Fetch file system attributes
@@ -91,36 +89,6 @@ def convert_pdf_to_img(pdf_path: str):
         images = convert_from_path(pdf_path)
     return images
 
-def cache_init():
-    global cache
-    # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
-    if cache is None:
-        cache = Cache('embedding-cache', limit=1000, evict='lru')
-
-def load_embedding_model():
-    global embedding_model
-    local_path = "models/qwen3-vl-embedding-2b"
-    if embedding_model is None:
-        print("Loading embedding model into VRAM...")
-        if os.path.exists(local_path):
-            print("Loading local model...")
-            embedding_model = SentenceTransformer(local_path, device="cuda", local_files_only=True)
-        else:
-            embedding_model = SentenceTransformer("Qwen/Qwen3-VL-Embedding-2B", device="cuda")
-            embedding_model.save("models/qwen3-vl-embedding-2b")
-
-def unload_embedding_model():
-    global embedding_model, cache
-    if embedding_model is not None:
-        print("Unloading embedding model from VRAM...")
-        del embedding_model
-        embedding_model = None
-        clear_vram()
-    if cache is not None:
-        cache.close()
-        del cache
-        cache = None
-
 def clean_text(text):
     text = unicodedata.normalize('NFKD', text)
     text = text.lower()
@@ -148,13 +116,13 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
         if text_splitter.split_documents(docs):
             text_chunks = text_splitter.split_documents(docs)
             cleaned_sentences = [clean_text(str(chunk)) for chunk in text_chunks]
-            embeddings = embedding_model.encode(cleaned_sentences, convert_to_numpy=True)
+            embeddings = embedding_encode(cleaned_sentences, convert_to_numpy=True)
             return np.mean(embeddings, axis=0)
         else:
             images = convert_pdf_to_img(pdf_path)
             embeddings = []
             for img in images:
-                img_embedding = embedding_model.encode(img, convert_to_numpy=True)
+                img_embedding = embedding_encode(img, convert_to_numpy=True)
                 embeddings.append(img_embedding)
             return np.mean(embeddings, axis=0)
     except Exception as e:
@@ -170,7 +138,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None):
         text_chunks = text_splitter.split_documents(docs)
         if text_chunks:
             cleaned_sentences = [clean_text(str(chunk)) for chunk in text_chunks]
-            embeddings = embedding_model.encode(cleaned_sentences, convert_to_numpy=True)
+            embeddings = embedding_encode(cleaned_sentences, convert_to_numpy=True)
             return np.mean(embeddings, axis=0)
         else:
             temp_pdf_path = "temp_doc.pdf"
@@ -180,7 +148,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None):
                 os.remove(temp_pdf_path)
             embeddings = []
             for img in images:
-                img_embedding = embedding_model.encode(img, convert_to_numpy=True)
+                img_embedding = embedding_encode(img, convert_to_numpy=True)
                 embeddings.append(img_embedding)
             return np.mean(embeddings, axis=0)
     except Exception as e:
@@ -195,7 +163,6 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
 
     mean_embeddings = {}
     total_files = len(files_list)
-    cache_init()
     
     for idx, file_name in enumerate(files_list):
         if check_cancel and check_cancel():
@@ -215,7 +182,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         
         # If the cache misses
         if mean_embedding is None:
-            load_embedding_model() # only load model if cache miss
+            load_embedding_model(EMBEDDING_MODEL_NAME) # only load model if cache miss
             # generate mean embedding
             match Path(file_path).suffix.lower():
                 case '.pdf':
@@ -223,7 +190,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
                 case '.docx':
                     mean_embedding = generate_docx_mean_embedding(file_path, status_callback)
                 case '.png' | '.jpg' | '.jpeg' | '.avif' | '.bmp' | '.tiff'| '.webp':
-                    mean_embedding = embedding_model.encode(Image.open(file_path), convert_to_numpy=True)
+                    mean_embedding = embedding_encode(Image.open(file_path), convert_to_numpy=True)
             if mean_embedding is not None: 
                 store_cache_embedding(file_path, mean_embedding)
             else:
@@ -245,11 +212,11 @@ def get_directory_mean_embeddings(subdirectories: list) -> dict:
         print("No subdirectories found. Exiting.")
         return None
 
-    load_embedding_model()
+    load_embedding_model(EMBEDDING_MODEL_NAME)
     mean_embeddings = {} # a dictionary with elements in the key-value format of {file_name: mean_embedding}
 
     for dir_name in subdirectories:
-        mean_embeddings[dir_name] = embedding_model.encode(str(dir_name), convert_to_numpy=True)
+        mean_embeddings[dir_name] = embedding_encode(str(dir_name), convert_to_numpy=True)
 
     # Ensure we have processed at least some data
     if len(mean_embeddings) == 0:

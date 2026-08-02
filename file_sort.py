@@ -1,7 +1,6 @@
 import os
 import shutil
 import torch
-import tkinter as tk
 import numpy as np
 import re
 import ollama
@@ -14,72 +13,13 @@ from sklearn.decomposition import PCA
 from PIL import Image
 from collections import defaultdict
 
-from file_embeddings import embeddings_init, clear_vram, get_file_mean_embeddings, get_directory_mean_embeddings, unload_embedding_model, get_file_sample
-
-# --- Configuration ---
-processor = None
-llm = None  
-
-import os
-import torch
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+from model_commons import unload_embedding_model, load_llm, unload_llm, llm_chat
+from file_embeddings import get_file_mean_embeddings, get_directory_mean_embeddings, get_file_sample
 
 # Global variable declarations
 processor = None
 llm = None
-
-def load_llm():
-    global processor, llm
-    if llm is None:
-        model_id = "google/gemma-4-E2B-it"
-        local_dir = "models/gemma-4-E2B-it"
-
-        # Check if the model has already been saved locally
-        if os.path.exists(local_dir):
-            print(f"Loading LLM offline from '{local_dir}'...")
-            processor = AutoProcessor.from_pretrained(local_dir)
-            llm = AutoModelForMultimodalLM.from_pretrained(
-                local_dir, 
-                dtype=torch.bfloat16,
-                local_files_only=True
-            ).to("cuda")
-        else:
-            print(f"Downloading LLM from Hugging Face ({model_id})...")
-            processor = AutoProcessor.from_pretrained(model_id)
-            llm = AutoModelForMultimodalLM.from_pretrained(
-                model_id, 
-                dtype=torch.bfloat16
-            )
-            
-            print(f"Saving model and processor locally to '{local_dir}'...")
-            processor.save_pretrained(local_dir)
-            llm.save_pretrained(local_dir)
-            
-            llm = llm.to("cuda")
-
-def unload_llm():
-    global processor, llm
-    if llm is not None:
-        print("Unloading LLM from VRAM...")
-        del llm
-        del processor
-        llm = None
-        processor = None
-        clear_vram()
-
-def file_sort_init():
-    """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
-    huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
-
-    if not huggingface_token:
-        raise ValueError("HUGGINGFACE_TOKEN environment variable is not set.")
-        
-    embeddings_init()
-
-    try:
-        login(token=huggingface_token)
-    except Exception as e:
-        print(f"Error encountered when logging into huggingface: {e}. Using offline mode.")
+LLM_NAME = "google/gemma-4-E2B-it"
 
 def optimal_clustering(embeddings:list, recursive:bool=True, status_callback = None) -> list:
     THRESHOLD = 0.45
@@ -292,20 +232,7 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
             content_list.append({"type": "text", "text": prompt})
             
             messages = [{"role": "user", "content": content_list}]
-            text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            
-            if loaded_images:
-                inputs = processor(text=text_prompt, images=loaded_images, return_tensors="pt")
-            else:
-                inputs = processor(text=text_prompt, return_tensors="pt")
-                
-            inputs = {k: v.to("cuda") for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                generated_ids = llm.generate(**inputs, max_new_tokens=40)
-                
-            generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)]
-            label = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+            label = llm_chat(messages, loaded_images, max_tokens=40)
             
             # Strip filesystem-incompatible characters
             label = re.sub(r'[\\/*?:"<>|]', "", label)
@@ -335,7 +262,6 @@ def generate_llm_label(prompt: str, img_paths: list = None, online: bool = False
 
 # --- Core Orchestration & Recursive Processing ---
 def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = False, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
-    global processor, llm
     if not groups_final:
         return {}
         
@@ -344,7 +270,7 @@ def AutoLabelClusters(dir_path: str, groups_final: dict | list, online:bool = Fa
     if status_callback: status_callback(msg)
     
     if not online:
-        load_llm()
+        load_llm(LLM_NAME)
 
     # Helpers to support both raw dictionaries and sorted list-of-tuples representations
     def is_leaf_node(node):

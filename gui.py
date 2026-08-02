@@ -1,15 +1,14 @@
 import os
 import platform
 import subprocess
-import threading
 import time
 import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import filedialog, ttk
 from PIL import Image, ImageTk
+from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
-
 
 class GUI:
 
@@ -22,6 +21,7 @@ class GUI:
         self.selected_path = None
         self.worker = None
         self.is_cancelled = False
+        self.executor = ThreadPoolExecutor(max_workers = 5)
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
@@ -33,7 +33,7 @@ class GUI:
         self.root.rowconfigure(1, weight=1)
         self.root.rowconfigure(2, weight=0)
         self.root.columnconfigure(0, weight=1)
-        self.root.columnconfigure(1, weight=1)
+        self.root.columnconfigure(1, weight=0)
 
         # Asset References (stored on self to prevent garbage collection)
         self.prev_icon = ImageTk.PhotoImage(
@@ -278,8 +278,11 @@ class GUI:
             self.sidebar_visible = True
             
     def _build_right_frame(self):
-        # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, AND CLERKBOT)
-        right_container = ttk.Frame(self.root)
+        # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, FILE SORT AND CLERKBOT)
+        right_container = ttk.Frame(self.root, width=350) # Fixed width
+        # Prevent internal child widgets from stretching the frame width
+        right_container.grid_propagate(False)
+
         right_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
         right_container.rowconfigure(1, weight=1)
         right_container.columnconfigure(0, weight=1)
@@ -543,10 +546,8 @@ class GUI:
         self.update_progress_bar(0)
         self.update_status_console("Initializing semantic indexing system...")
 
-        self.worker = threading.Thread(
-            target=self.sorting_thread_worker, args=(current_dir,), daemon=True
-        ) # Non blocking thread to keep GUI
-        self.worker.start()
+        # Create thread for task and send to ThreadPool, so it does not freeze GUI
+        self.executor.submit(self.sorting_thread_worker, current_dir)
 
     def cancel_file_sort(self):
         self.is_cancelled = True
