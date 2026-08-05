@@ -1,6 +1,7 @@
 import os
 import gc
 import torch
+import threading
 from sentence_transformers import SentenceTransformer
 from huggingface_hub import login
 from transformers import AutoProcessor, AutoModelForMultimodalLM
@@ -8,6 +9,12 @@ from transformers import AutoProcessor, AutoModelForMultimodalLM
 embedding_model = None 
 processor = None
 llm = None
+
+# Synchronization Primitive
+cv = threading.Condition()
+current_model = None  # Tracks loaded model: None, "embedding", or "llm"
+embedding_active_count = 0
+llm_active_count = 0
 
 def models_init():
     """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
@@ -29,25 +36,42 @@ def clear_vram():
 
 ## EMBEDDING MODEL FUNCTIONS
 def load_embedding_model(model_id: str):
-        global embedding_model
-        model_last_name = model_id.split('/')[-1].lower()
-        local_path = f"models/{model_last_name}"
-        if embedding_model is None:
-            print("Loading embedding model into VRAM...")
-            if os.path.exists(local_path):
-                print("Loading local model...")
-                embedding_model = SentenceTransformer(local_path, device="cuda", local_files_only=True)
-            else:
-                embedding_model = SentenceTransformer(model_id, device="cuda")
-                embedding_model.save(local_path)
+        global cv, embedding_model, current_model, embedding_active_count
+        with cv:
+            while current_model == "llm":
+                # tell the thread to wait until VRAM is clear of any llm operations.
+                cv.wait()
+
+            if current_model == None:
+                # Load the model
+                model_last_name = model_id.split('/')[-1].lower()
+                local_path = f"models/{model_last_name}"
+                if embedding_model is None:
+                    print("Loading embedding model into VRAM...")
+                    if os.path.exists(local_path):
+                        print("Loading local model...")
+                        embedding_model = SentenceTransformer(local_path, device="cuda", local_files_only=True)
+                    else:
+                        embedding_model = SentenceTransformer(model_id, device="cuda")
+                        embedding_model.save(local_path)
+                current_model = "embedding"
+
+            embedding_active_count += 1 # an additional thread is using the embedding model
 
 def unload_embedding_model():
-        global embedding_model
-        if embedding_model is not None:
-            print("Unloading embedding model from VRAM...")
-            del embedding_model
-            embedding_model = None
-            clear_vram()
+        global cv, embedding_model, current_model, embedding_active_count
+        with cv:
+            embedding_active_count -= 1
+
+            if embedding_active_count == 0: # all threads finished embedding operation
+                if embedding_model is not None:
+                    print("Unloading embedding model from VRAM...")
+                    del embedding_model
+                    embedding_model = None
+                    clear_vram()
+
+                    current_model = None
+                    cv.notify_all()  # Signal waiting LLM threads to proceed
 
 def embedding_encode(*args, **kwargs):
         """Delegates encoding directly to the underlying SentenceTransformer model."""
@@ -61,48 +85,65 @@ def embedding_encode(*args, **kwargs):
 
 ## LLM FUNCTIONS
 def load_llm(model_id: str):
-    global processor, llm
-    if llm is None:
-        model_last_name = model_id.split('/')[-1].lower()
-        local_path = f"models/{model_last_name}"
+    global cv, processor, llm, current_model, llm_active_count
+    with cv:
+        while current_model == "embedding":
+            # tell the thread to wait until VRAM is clear of any llm operations.
+            cv.wait()
 
-        # Check if the model has already been saved locally
-        if os.path.exists(local_path):
-            print(f"Loading LLM offline from '{local_path}'...")
-            processor = AutoProcessor.from_pretrained(local_path)
-            llm = AutoModelForMultimodalLM.from_pretrained(
-                local_path, 
-                dtype=torch.bfloat16,
-                local_files_only=True
-            ).to("cuda")
-        else:
-            print(f"Downloading LLM from Hugging Face ({model_id})...")
-            processor = AutoProcessor.from_pretrained(model_id)
-            llm = AutoModelForMultimodalLM.from_pretrained(
-                model_id, 
-                dtype=torch.bfloat16
-            )
-            
-            print(f"Saving model and processor locally to '{local_path}'...")
-            processor.save_pretrained(local_path)
-            llm.save_pretrained(local_path)
-            
-            llm = llm.to("cuda")
-    else:
-        print("LLM is already loaded.")
+        if current_model == None:
+            # Load the model
+            if llm is None:
+                model_last_name = model_id.split('/')[-1].lower()
+                local_path = f"models/{model_last_name}"
+
+                # Check if the model has already been saved locally
+                if os.path.exists(local_path):
+                    print(f"Loading LLM offline from '{local_path}'...")
+                    processor = AutoProcessor.from_pretrained(local_path)
+                    llm = AutoModelForMultimodalLM.from_pretrained(
+                        local_path, 
+                        dtype=torch.bfloat16,
+                        local_files_only=True
+                    ).to("cuda")
+                else:
+                    print(f"Downloading LLM from Hugging Face ({model_id})...")
+                    processor = AutoProcessor.from_pretrained(model_id)
+                    llm = AutoModelForMultimodalLM.from_pretrained(
+                        model_id, 
+                        dtype=torch.bfloat16
+                    )
+                    
+                    print(f"Saving model and processor locally to '{local_path}'...")
+                    processor.save_pretrained(local_path)
+                    llm.save_pretrained(local_path)
+                    
+                    llm = llm.to("cuda")
+            current_model = "llm"
+
+        llm_active_count += 1
 
 def unload_llm():
-    global processor, llm
-    if llm is not None:
-        print("Unloading LLM from VRAM...")
-        del llm
-        del processor
-        llm = None
-        processor = None
-        clear_vram()
+    global cv, processor, llm, current_model, llm_active_count
+
+    with cv:
+        llm_active_count -= 1
+
+        # If this is the last thread using the LLM, unload it
+        if llm_active_count == 0:
+            if llm is not None:
+                print("Unloading LLM from VRAM...")
+                del llm
+                del processor
+                llm = None
+                processor = None
+                clear_vram()
+
+                current_model = None
+                cv.notify_all()
 
 def llm_chat(messages: list, images: list = None, max_tokens:int = 512) -> str:
-    global llm
+    global llm, processor
     if llm is None:
         raise RuntimeError(
             "Model is not loaded. Call load_llm() before chatting."
