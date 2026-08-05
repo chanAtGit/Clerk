@@ -88,6 +88,8 @@ def load_llm(model_id: str):
             llm.save_pretrained(local_path)
             
             llm = llm.to("cuda")
+    else:
+        print("LLM is already loaded.")
 
 def unload_llm():
     global processor, llm
@@ -99,7 +101,7 @@ def unload_llm():
         processor = None
         clear_vram()
 
-def llm_chat(messages: list, images: list|None, max_tokens:int = 512):
+def llm_chat(messages: list, images: list = None, max_tokens:int = 512) -> str:
     global llm
     if llm is None:
         raise RuntimeError(

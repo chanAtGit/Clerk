@@ -480,7 +480,8 @@ def print_groups(groups_final: dict, num_of_indents:int = 0, sort_into_existing:
     misc_files = []
     for folder in groups_final.keys():
         if isinstance(groups_final[folder], list):
-            if not sort_into_existing and len(groups_final[folder]) == 1: # if the folder only contains 1 file, the file is moved to the misc files
+            if not sort_into_existing and len(groups_final[folder]) == 1: 
+                # if the folder only contains 1 file, the file is moved to the misc files
                 misc_files.append(groups_final[folder][0])
                 continue
 

@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 import time
+import re
 import tkinter as tk
 from tkinter import scrolledtext
 from tkinter import filedialog, ttk
@@ -194,9 +195,45 @@ class GUI:
         )
         sidebar_title.pack(anchor="w", pady=(20,0))
 
-        ttk.Button(self.sidebar_frame, text="Placeholder Chat").pack(
-            fill=tk.X, pady=2
+        
+        # ttk.Button(self.sidebar_frame, text="Placeholder Chat").pack(
+        #     fill=tk.X, pady=2
+        # )
+
+    def _build_chat_window(self, parent_container):
+        """Build the chat window area"""
+        self.chat_frame = ttk.Frame(parent_container)
+        self.chat_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 1. Pack bottom input frame FIRST so it anchors to the bottom space
+        user_input_frame = ttk.Frame(self.chat_frame)
+        user_input_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+        self.input_btn = tk.Button(user_input_frame, text="⌯⌲", font=("Arial", 14))
+        self.input_btn.pack(side=tk.RIGHT)
+
+        self.chat_input = tk.Text(
+                    user_input_frame, 
+                    height=3, 
+                    padx=10,
+                    pady=10,
+                    font=("Arial", 11)
+                    )
+        self.chat_input.pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
+        )  # expand=True lets text box fill width
+
+        # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
+        self.chat_content = scrolledtext.ScrolledText(
+            self.chat_frame,
+            height=10,  # Lower baseline height request so it fits small windows
+            width=30,
+            padx=10,
+            pady=10,
+            font=("Arial", 12),
+            wrap=tk.WORD,
         )
+        self.chat_content.pack(fill=tk.BOTH, expand=True)
 
     def _build_clerkbot_page(self, parent_container):
         """Build ClerkBot (Chatbot) page"""
@@ -217,48 +254,20 @@ class GUI:
 
         # Title Label
         clerkbot_label = tk.Label(
-            top_bar, text="ClerkBot", font=("Arial", 16, "bold")
+            top_bar, text="Ask ClerkBot!", font=("Arial", 16, "bold")
         )
-        clerkbot_label.pack(side=tk.LEFT)
+        clerkbot_label.pack(anchor='w')
+        self.tracking_dir_label = tk.Label(
+            top_bar, text=f"Tracking folder: None", font=("Arial", 9)
+        )
+        self.tracking_dir_label.pack(anchor='w')
 
         # --- Body Area Container ---
         body_container = ttk.Frame(self.page2)
         body_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # --- Main Content Area - Chat Zone ---
-        chat_frame = ttk.Frame(body_container)
-        chat_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 1. Pack bottom input frame FIRST so it anchors to the bottom space
-        user_input_frame = ttk.Frame(chat_frame)
-        user_input_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
-
-        self.input_btn = tk.Button(user_input_frame, text="⌯⌲", font=("Arial", 14))
-        self.input_btn.pack(side=tk.RIGHT)
-
-        self.chat_input = tk.Text(
-                    user_input_frame, 
-                    height=3, 
-                    padx=10,
-                    pady=10,
-                    font=("Arial", 11)
-                    )
-        self.chat_input.pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
-        )  # expand=True lets text box fill width
-
-        # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
-        self.chat_content = scrolledtext.ScrolledText(
-            chat_frame,
-            height=10,  # Lower baseline height request so it fits small windows
-            width=30,
-            padx=10,
-            pady=10,
-            font=("Arial", 12),
-            wrap=tk.WORD,
-        )
-        self.chat_content.pack(fill=tk.BOTH, expand=True)
-
+        self._build_chat_window(body_container)
         # --- Overlay Sidebar Frame ---
         # Note: Do NOT pack or grid this frame! It will be placed dynamically.
         self._build_sidebar(body_container)
@@ -339,22 +348,23 @@ class GUI:
             self.file_listbox.delete(0, tk.END)
             self.file_listbox.insert(tk.END, f"Error: {e}")
 
+    def _goto_folder(self, dir_path: str):
+        self.path_entry.delete(0, tk.END)
+        self.path_entry.insert(0, dir_path)
+        self.tracking_dir_label.config(text=f"Tracking folder: {re.split(r"[/\\]", dir_path)[-1]}")
+        self.display_files_in_dir(dir_path)
+
     def browse_folder(self):
         selected_dir = filedialog.askdirectory(title="Select a Directory")
         if selected_dir:
             self.selected_path = selected_dir
-            self.path_entry.delete(0, tk.END)
-            self.path_entry.insert(0, selected_dir)
-            self.display_files_in_dir(selected_dir)
+            self._goto_folder(selected_dir)
 
     def prev_folder(self):
         if not self.path_entry.get():
             return
         previous_dir = os.path.dirname(self.path_entry.get())
-        if previous_dir:
-            self.path_entry.delete(0, tk.END)
-            self.path_entry.insert(0, previous_dir)
-            self.display_files_in_dir(previous_dir)
+        if previous_dir: self._goto_folder(previous_dir)
 
     def next_folder(self):
         if not self.selected_path:
@@ -371,9 +381,7 @@ class GUI:
 
         if path_parts and path_parts[0]:
             next_step = os.path.join(current_dir, path_parts[0])
-            self.path_entry.delete(0, tk.END)
-            self.path_entry.insert(0, next_step)
-            self.display_files_in_dir(next_step)
+            self._goto_folder(next_step)
 
     def refresh_folder(self):
         current_dir = self.path_entry.get()
@@ -391,10 +399,8 @@ class GUI:
         if selected_file.startswith("📁"):
             folder_name = selected_file[1:]
             new_path = os.path.join(current_dir, folder_name)
-            self.path_entry.delete(0, tk.END)
-            self.path_entry.insert(0, new_path)
             self.selected_path = new_path
-            self.display_files_in_dir(new_path)
+            self._goto_folder(new_path)
         else:
             filename = os.path.join(current_dir, selected_file)
             if platform.system() == "Windows":
