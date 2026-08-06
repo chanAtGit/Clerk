@@ -16,6 +16,9 @@ current_model = None  # Tracks loaded model: None, "embedding", or "llm"
 embedding_active_count = 0
 llm_active_count = 0
 
+def print_active_count():
+    print(f"embedding use: {embedding_active_count}, llm use: {llm_active_count}")
+
 def models_init():
     """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
     huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
@@ -57,12 +60,13 @@ def load_embedding_model(model_id: str):
                 current_model = "embedding"
 
             embedding_active_count += 1 # an additional thread is using the embedding model
+            print_active_count()
 
 def unload_embedding_model():
         global cv, embedding_model, current_model, embedding_active_count
         with cv:
-            embedding_active_count -= 1
-
+            if embedding_active_count > 0: embedding_active_count -= 1
+            print_active_count()
             if embedding_active_count == 0: # all threads finished embedding operation
                 if embedding_model is not None:
                     print("Unloading embedding model from VRAM...")
@@ -122,12 +126,14 @@ def load_llm(model_id: str):
             current_model = "llm"
 
         llm_active_count += 1
+        print_active_count()
 
 def unload_llm():
     global cv, processor, llm, current_model, llm_active_count
 
     with cv:
-        llm_active_count -= 1
+        if llm_active_count > 0: llm_active_count -= 1
+        print_active_count()
 
         # If this is the last thread using the LLM, unload it
         if llm_active_count == 0:
