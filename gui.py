@@ -4,12 +4,12 @@ import subprocess
 import time
 import re
 import tkinter as tk
-from tkinter import scrolledtext
-from tkinter import filedialog, ttk
+from tkinter import scrolledtext, filedialog, ttk
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
+from widgets import SortingJobWidget, ScrollableFrame
 
 class GUI:
 
@@ -21,8 +21,11 @@ class GUI:
         # State Variables
         self.selected_path = None
         self.worker = None
-        self.is_cancelled = False
-        self.executor = ThreadPoolExecutor(max_workers = 5)
+        self.is_cancelled_all = False
+
+        # Thread Executor and Helpers
+        self.executor = ThreadPoolExecutor(max_workers=3)
+        self.sorting_folders = []
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
@@ -107,13 +110,15 @@ class GUI:
         self.page1.grid_propagate(False)
         self.page1.rowconfigure(0, weight=0)
         self.page1.rowconfigure(1, weight=0)
+        self.page1.rowconfigure(2, weight=0)
+        self.page1.rowconfigure(3, weight=1)  # <--- Allow row 3 to expand vertically
         self.page1.columnconfigure(0, weight=1)
 
         # OPTIONS PANEL
         options_panel = ttk.Frame(self.page1)
         options_panel.grid(row=0, column=0, sticky="w", pady=5)
 
-        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Helvetica", 10, "bold"))
+        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Helvetica", 12, "bold"))
         mode_label.pack(anchor="w")
         rb1 = tk.Radiobutton(
                 options_panel,
@@ -145,22 +150,9 @@ class GUI:
         )
         recursive_toggle_btn.pack(side="top", anchor="w")
 
-        # PROGRESS BAR
-        progress_label = ttk.Label(self.page1, text="Sorting Progress Indicator:")
-        progress_label.grid(row=1, column=0, sticky="w", pady=(10, 2))
-
-        self.progress_bar = ttk.Progressbar(
-            self.page1, orient="horizontal", mode="determinate"
-        )
-        self.progress_bar.grid(row=2, column=0, sticky="ew", pady=5)
-
-        self.status_text = ttk.Label(self.page1, text="", font=("Consolas", 9))
-        self.status_text.grid(row=3, column=0, sticky="ew", pady=5)
-        self.status_text.bind("<Configure>", self.auto_wrap)
-
         # BUTTONS PANEL
         btn_panel = ttk.Frame(self.page1)
-        btn_panel.grid(row=4, column=0, sticky="ew", pady=5)
+        btn_panel.grid(row=1, column=0, sticky="ew", pady=5)
 
         self.sort_btn = tk.Button(
             btn_panel,
@@ -171,15 +163,23 @@ class GUI:
         )
         self.sort_btn.pack(side=tk.LEFT)
 
-        self.cancel_btn = tk.Button(
+        self.cancel_all_btn = tk.Button(
             btn_panel,
-            text="Cancel",
+            text="Cancel All",
             command=self.cancel_file_sort,
             width=8,
             font=("Arial", 11),
             state=tk.DISABLED,
         )
-        self.cancel_btn.pack(side=tk.RIGHT)
+        self.cancel_all_btn.pack(side=tk.RIGHT)
+
+        sorting_jobs_label = tk.Label(self.page1, text="Current sorting jobs", font=("Helvetica", 10, "underline"))
+        sorting_jobs_label.grid(row=2, column=0, sticky="w", pady=5)
+
+        # Instantiating the standalone scrollable container to store current sorting jobs
+        self.sorting_jobs_list = ScrollableFrame(self.page1)
+        # Sticky "nsew" fills both vertical and horizontal space
+        self.sorting_jobs_list.grid(row=3, column=0, sticky="nsew", pady=5)
 
     def _build_sidebar(self, parent_container):
         self.sidebar_frame = ttk.Frame(
@@ -194,11 +194,6 @@ class GUI:
             self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
         )
         sidebar_title.pack(anchor="w", pady=(20,0))
-
-        
-        # ttk.Button(self.sidebar_frame, text="Placeholder Chat").pack(
-        #     fill=tk.X, pady=2
-        # )
 
     def _build_chat_window(self, parent_container):
         """Build the chat window area"""
@@ -221,12 +216,12 @@ class GUI:
                     )
         self.chat_input.pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
-        )  # expand=True lets text box fill width
+        )
 
         # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
         self.chat_content = scrolledtext.ScrolledText(
             self.chat_frame,
-            height=10,  # Lower baseline height request so it fits small windows
+            height=10,
             width=30,
             padx=10,
             pady=10,
@@ -268,28 +263,23 @@ class GUI:
 
         # --- Main Content Area - Chat Zone ---
         self._build_chat_window(body_container)
+
         # --- Overlay Sidebar Frame ---
-        # Note: Do NOT pack or grid this frame! It will be placed dynamically.
         self._build_sidebar(body_container)
 
     def _toggle_sidebar(self):
         """Show or hide the sidebar overlay using place()"""
         if self.sidebar_visible:
-            # Unmap from screen without destroying
             self.sidebar_frame.place_forget()
             self.sidebar_visible = False
         else:
-            # Float on top at x=-10, y=0, matching 100% height of body_container
             self.sidebar_frame.place(x=-10, y=0, relheight=1.0, width=250)
-
-            # Lift the sidebar to the top of the z-index stack
             self.sidebar_frame.lift()
             self.sidebar_visible = True
             
     def _build_right_frame(self):
         # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, FILE SORT AND CLERKBOT)
-        right_container = ttk.Frame(self.root, width=350) # Fixed width
-        # Prevent internal child widgets from stretching the frame width
+        right_container = ttk.Frame(self.root, width=350)
         right_container.grid_propagate(False)
 
         right_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
@@ -351,7 +341,7 @@ class GUI:
     def _goto_folder(self, dir_path: str):
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
-        self.tracking_dir_label.config(text=f"Tracking folder: {re.split(r"[/\\]", dir_path)[-1]}")
+        self.tracking_dir_label.config(text=f"Tracking folder: {re.split(r'[/\\]', dir_path)[-1]}")
         self.display_files_in_dir(dir_path)
 
     def browse_folder(self):
@@ -410,11 +400,10 @@ class GUI:
             else:
                 subprocess.Popen(["xdg-open", filename])
 
-    def open_confirm_popup(self, groups: dict) -> bool:
+    def open_confirm_popup(self, directory: str, groups: dict) -> bool:
         """Display where the files will be sorted and allow user to confirm or reject."""
-        # 1. Create a new top-level window
         popup = tk.Toplevel(self.root)
-        popup.title("Confirm sorting")
+        popup.title(f"Sorting complete for {directory}")
         popup.geometry("450x450")
 
         result = False
@@ -429,11 +418,11 @@ class GUI:
             result = False
             popup.destroy()
 
-        # 2. Header
         title = tk.Label(popup, text="Sorting result", font=("Arial", 12, "bold"))
-        title.pack(pady=(15, 5))
+        title.pack(pady=(15, 2))
+        title = tk.Label(popup, text=f"{directory}", font=("Arial", 8, "bold"))
+        title.pack(pady=(0, 5))
 
-        # 3. Button frame placed at the bottom FIRST
         btn_frame = tk.Frame(popup)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
 
@@ -443,7 +432,6 @@ class GUI:
         reject_btn = tk.Button(btn_frame, text="Reject", width=12, command=reject_sorting)
         reject_btn.pack(side=tk.RIGHT, padx=40)
 
-        # 4. Text widget filling remaining space (measured in lines/chars, not pixels)
         sorting_info = scrolledtext.ScrolledText(popup, height=20, width=65, font=("Arial", 10), wrap=tk.WORD)
         sorting_info.pack(padx=15, pady=10, fill=tk.BOTH, expand=True)
 
@@ -456,112 +444,150 @@ class GUI:
             print_to_widget=print_line
         )
 
-        # Make text box uneditable
         sorting_info.config(state="disabled") 
 
-        # 5. Control window behavior
         popup.grab_set()
         popup.wait_window(popup)
 
         return result
 
     # --- Thread-Safe Updates & Worker Logic ---
-    def update_status_console(self, text):
-        self.root.after(0, lambda: self.status_text.config(text=text))
+    # def update_status_console(self, text):
+    #     self.root.after(0, lambda: self.sorting_job_widget.set_status(text))
 
-    def update_progress_bar(self, val):
-        self.root.after(0, lambda: self.progress_bar.config(value=val))
+    # def update_progress_bar(self, val):
+    #     self.root.after(0, lambda: self.sorting_job_widget.set_progress(val))
 
-    def check_cancel_status(self):
-        return self.is_cancelled
+    def check_cancel_all_status(self):
+        return self.is_cancelled_all
 
-    def sorting_thread_worker(self, current_dir):
+    def sorting_thread_worker(self, sorting_widget: SortingJobWidget):
         start_time = time.perf_counter()
         try:
+            # Step 0: Basic Thread Setup.
+            current_dir = sorting_widget.target_dir
+            recursive_config: bool = sorting_widget.recursive
+            online_config: bool = sorting_widget.online
+            sort_into_existing_config: bool = sorting_widget.sort_into_existing
+
+            # --- Helper methods to safely update Tkinter from background threads ---
+            def safe_set_status(text):
+                self.root.after(0, lambda: sorting_widget.set_status(text))
+
+            def safe_set_progress(val):
+                self.root.after(0, lambda: sorting_widget.set_progress(val))
+
+            # Step 0.1: Append Sorting Job Widget to Sorting Job List ScollableFrame
+            safe_set_progress(0)
+            safe_set_status("Initializing semantic indexing system...")
+
+            # Step 0.2: Setup cancellation function
+            def check_cancel_status() -> bool:
+                cancel_status: bool = self.is_cancelled_all or sorting_widget.is_cancel
+                if cancel_status:
+                    safe_set_status("Cancelling sorting...")
+                    safe_set_progress(0)
+                return cancel_status
+
             # Step 1: Semantic Clustering
-            if self.generate_folder.get(): # the sorting method generates folders and move files into them
+            if self.generate_folder.get():
                 groups = SemanticClustering(
                     current_dir,
-                    recursive=not self.singular_sorting.get(),
-                    status_callback=self.update_status_console,
-                    progress_callback=self.update_progress_bar,
-                    check_cancel=self.check_cancel_status,
+                    recursive=recursive_config,
+                    status_callback=safe_set_status,
+                    progress_callback=safe_set_progress,
+                    check_cancel=check_cancel_status,
                 )
-            else: # the sorting method moves files into existing folders
+            else:
                 groups = SortIntoFolders(
                     current_dir,
-                    status_callback=self.update_status_console,
-                    progress_callback=self.update_progress_bar,
-                    check_cancel=self.check_cancel_status,
+                    status_callback=safe_set_status,
+                    progress_callback=safe_set_progress,
+                    check_cancel=check_cancel_status,
                 )
 
             # Step 2: Dynamic Auto-Labelling
             if groups:
                 if self.generate_folder.get():
-                    # Only the method which generates folders require the LLM to name the new folders
                     groups = AutoLabelClusters(
                         current_dir,
                         groups,
-                        online=self.use_online_llm.get(),
-                        status_callback=self.update_status_console,
-                        progress_callback=self.update_progress_bar,
-                        check_cancel=self.check_cancel_status,
+                        online=online_config,
+                        status_callback=safe_set_status,
+                        progress_callback=safe_set_progress,
+                        check_cancel=check_cancel_status,
                     )
 
                 # Step 3: Organise Files
-
-                # Open the custom popup to inform the user about the sorting process
-                confirm: bool = self.open_confirm_popup(groups)
+                confirm: bool = self.open_confirm_popup(current_dir, groups)
                 
                 if confirm:
                     MoveFiles(
                         current_dir,
                         groups,
-                        sort_into_existing= not self.generate_folder.get(),
-                        status_callback=self.update_status_console,
-                        progress_callback=self.update_progress_bar,
-                        check_cancel=self.check_cancel_status,
+                        sort_into_existing=sort_into_existing_config,
+                        status_callback=safe_set_status,
+                        progress_callback=safe_set_progress,
+                        check_cancel=check_cancel_status,
                     )
+
+                # Calculate sorting time
                 end_time = time.perf_counter()
                 elapsed_time = end_time - start_time
                 minutes, seconds = divmod(elapsed_time, 60)
-                self.update_status_console(
+                safe_set_status(
                     f"Sorting completed in {int(minutes)}m {int(seconds)}s"
                 )
 
         except InterruptedError:
-            self.update_status_console("Sorting job cleanly stopped by user.")
+            safe_set_status("Sorting job cleanly stopped by user.")
         except Exception as e:
-            self.update_status_console(f"Execution Error: {str(e)}")
+            safe_set_status(f"Execution Error: {str(e)}")
         finally:
-            self.update_progress_bar(100 if not self.is_cancelled else 0)
-            self.sort_btn.config(state=tk.NORMAL)
-            self.cancel_btn.config(state=tk.DISABLED)
-            self.display_files_in_dir(current_dir)
+            safe_set_progress(0 if self.is_cancelled_all or sorting_widget.is_cancel else 100)
+            if self.path_entry.get() == current_dir: # the user is in browsing the current sorted directory
+                self.display_files_in_dir(current_dir) # Refresh the current directory
+
+            # Delay 5 seconds and destroy the widget
+            time.sleep(5)
+            sorting_widget.destroy()
+            self.sorting_folders.remove(current_dir)
+            if len(self.sorting_folders) == 0: # no folders are currently in sorting progress
+                self.cancel_all_btn.config(state=tk.DISABLED)
+
 
     def semantic_file_sort(self):
         current_dir = self.path_entry.get()
         if not current_dir or not os.path.exists(current_dir):
-            self.update_status_console("Please select a valid directory first.")
+            print("Please select a valid directory first.")
             return
 
-        self.is_cancelled = False
+        if current_dir in self.sorting_folders:
+            return
 
-        self.sort_btn.config(state=tk.DISABLED)
-        self.cancel_btn.config(state=tk.NORMAL)
-        self.update_progress_bar(0)
-        self.update_status_console("Initializing semantic indexing system...")
-
-        # Create thread for task and send to ThreadPool, so it does not freeze GUI
-        self.executor.submit(self.sorting_thread_worker, current_dir)
+        self.is_cancelled_all = False
+        self.cancel_all_btn.config(state=tk.NORMAL)
+        self.sorting_folders.append(current_dir)
+        
+        # --- Create and pack the widget on the MAIN thread before starting the worker ---
+        recursive_config: bool = not self.singular_sorting.get()
+        online_config: bool = self.use_online_llm.get()
+        sort_into_existing_config: bool = not self.generate_folder.get()
+        
+        sorting_widget = SortingJobWidget(
+            self.sorting_jobs_list.scrollable_frame,
+            target_dir=current_dir,
+            recursive=recursive_config,
+            online=online_config,
+            sort_into_existing=sort_into_existing_config
+        )
+        sorting_widget.pack(pady=5, fill=tk.X)
+    
+        # Pass the pre-created sorting_widget into the thread worker
+        self.executor.submit(self.sorting_thread_worker, sorting_widget)
 
     def cancel_file_sort(self):
-        self.is_cancelled = True
-        self.update_status_console("Cancellation requested... Stopping execution.")
-        self.cancel_btn.config(state=tk.DISABLED)
-
-    def auto_wrap(self, event):
-        event.widget.config(wraplength=event.width)
+        self.is_cancelled_all = True
 
     def run(self):
         self.root.mainloop()
