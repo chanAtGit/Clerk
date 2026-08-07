@@ -106,6 +106,7 @@ class SortingJobWidget(ttk.Frame):
         self.progress_bar.config(value=val)
 
 class ChatWidget():
+    '''Displayed on the sidebar, the user is transported to a chat session when clicked.'''
     def __init__(self, parent, name: str, chatsession_id: str, func = None):
         self.chatsession_id = chatsession_id
         # 1. Create a Style object
@@ -120,3 +121,142 @@ class ChatWidget():
 
         chat_name_btn = ttk.Button(parent, text=name, command = lambda: func(self.chatsession_id))
         chat_name_btn.pack(fill=tk.X, padx=2, pady=2)
+
+class TextBubble(ttk.Frame):
+    """A chat message bubble widget supporting markdown formatting and alignment."""
+
+    def __init__(self, parent, text: str, from_user: bool, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.text = text
+        self.from_user = from_user
+
+        # Outer row frame expands horizontally to allow left/right alignment
+        self.pack(fill=tk.X, padx=10, pady=5)
+
+        # Theme & alignment configurations
+        if self.from_user:
+            bg_color = "#0078D4"      # User bubble background (Blue)
+            fg_color = "#FFFFFF"      # User text color (White)
+            bg_code = "#005A9E"       # Code background for user
+            align_side = tk.RIGHT     # Pack to the right
+        else:
+            bg_color = "#E9E9EB"      # AI bubble background (Soft Gray)
+            fg_color = "#000000"      # AI text color (Black)
+            bg_code = "#D1D1D6"       # Code background for AI
+            align_side = tk.LEFT      # Pack to the left
+
+        # Inner container frame for padding & background
+        bubble_frame = tk.Frame(
+            self, bg=bg_color, padx=12, pady=8, highlightthickness=0
+        )
+        bubble_frame.pack(side=align_side, anchor="e" if self.from_user else "w")
+
+        # Text widget for markdown rendering
+        self.text_widget = tk.Text(
+            bubble_frame,
+            bg=bg_color,
+            fg=fg_color,
+            font=("Arial", 10),
+            wrap=tk.WORD,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            width=1,
+            height=1
+        )
+        self.text_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Render Markdown content & adjust dynamic dimensions
+        self._render_markdown(bg_code, fg_color)
+        self.text_widget.config(state="disabled")
+        self._adjust_size()
+
+    def _render_markdown(self, bg_code: str, fg_code: str):
+        """Parses basic Markdown formatting and applies Tkinter text tags."""
+        font_family = "Arial"
+        font_size = 10
+
+        # Configure formatting tags
+        self.text_widget.tag_configure("bold", font=(font_family, font_size, "bold"))
+        self.text_widget.tag_configure("italic", font=(font_family, font_size, "italic"))
+        self.text_widget.tag_configure("bold_italic", font=(font_family, font_size, "bold italic"))
+        self.text_widget.tag_configure("h1", font=(font_family, 14, "bold"))
+        self.text_widget.tag_configure("h2", font=(font_family, 12, "bold"))
+        self.text_widget.tag_configure(
+            "code_block",
+            font=("Consolas", 9),
+            background=bg_code,
+            foreground=fg_code,
+            lmargin1=10,
+            lmargin2=10
+        )
+        self.text_widget.tag_configure(
+            "inline_code",
+            font=("Consolas", 9),
+            background=bg_code,
+            foreground=fg_code
+        )
+
+        lines = self.text.split("\n")
+        in_code_block = False
+
+        for i, line in enumerate(lines):
+            # Code block toggle (```)
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+
+            if in_code_block:
+                self.text_widget.insert(tk.END, line + "\n", "code_block")
+                continue
+
+            # Headers
+            if line.startswith("# "):
+                self.text_widget.insert(tk.END, line[2:] + "\n", "h1")
+                continue
+            elif line.startswith("## ") or line.startswith("### "):
+                header_text = line.lstrip("#").strip()
+                self.text_widget.insert(tk.END, header_text + "\n", "h2")
+                continue
+
+            # Bullet points
+            if line.strip().startswith("- ") or line.strip().startswith("* "):
+                self.text_widget.insert(tk.END, "  • ")
+                line = line.strip()[2:]
+
+            # Inline formatting (bold, italic, inline code)
+            self._insert_inline_formatted(line + ("\n" if i < len(lines) - 1 else ""))
+
+    def _insert_inline_formatted(self, line: str):
+        """Splits text on markdown tokens and inserts with appropriate tags."""
+        pattern = re.compile(r'(\*\*\*.*?\*\*\*|\*\*.*?\*\*|\*.*?\*|`.*?`)')
+        parts = pattern.split(line)
+
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("***") and part.endswith("***") and len(part) >= 6:
+                self.text_widget.insert(tk.END, part[3:-3], "bold_italic")
+            elif part.startswith("**") and part.endswith("**") and len(part) >= 4:
+                self.text_widget.insert(tk.END, part[2:-2], "bold")
+            elif part.startswith("*") and part.endswith("*") and len(part) >= 2:
+                self.text_widget.insert(tk.END, part[1:-1], "italic")
+            elif part.startswith("`") and part.endswith("`") and len(part) >= 2:
+                self.text_widget.insert(tk.END, part[1:-1], "inline_code")
+            else:
+                text = part.replace(r"\*", "*").replace(r"\`", "`")
+                self.text_widget.insert(tk.END, text)
+
+    def _adjust_size(self):
+        """Dynamically calculates width and height to fit text comfortably."""
+        lines = self.text.split("\n")
+        max_line_len = max((len(l) for l in lines), default=0)
+
+        # Bound character width between 12 and 50 characters
+        calc_width = min(max(max_line_len + 2, 12), 50)
+        self.text_widget.config(width=calc_width)
+
+        # Force geometry calculation to get wrapped line count
+        self.update_idletasks()
+        line_count = int(self.text_widget.index("end-1c").split(".")[0])
+        self.text_widget.config(height=line_count)

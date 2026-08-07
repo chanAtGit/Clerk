@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
-from widgets import SortingJobWidget, ScrollableFrame, ChatWidget
+from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
 
 class GUI:
 
@@ -227,19 +227,32 @@ class GUI:
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
         )
 
-        # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
-        # self.chat_content = scrolledtext.ScrolledText(
-        #     self.chat_frame,
-        #     height=10,
-        #     width=30,
-        #     padx=10,
-        #     pady=10,
-        #     font=("Arial", 12),
-        #     wrap=tk.WORD,
-        # )
-        # self.chat_content.pack(fill=tk.BOTH, expand=True)
         self.chat_content = ScrollableFrame(self.chat_frame)
         self.chat_content.pack(fill=tk.BOTH, expand=True)
+
+#         TextBubble(
+#             parent=self.chat_content.scrollable_frame,
+#             text="Can you summarize the **selected files**?",
+#             from_user=True
+#         )
+
+#         TextBubble(
+#             parent=self.chat_content.scrollable_frame,
+#             text="""Here you go!""",
+#             from_user=False
+#         )
+
+#         code_block = '''
+#         ```python
+# def hello_world():
+#     print("Hello, World!")
+# ```
+#         '''
+#         TextBubble(
+#             parent=self.chat_content.scrollable_frame,
+#             text=code_block,
+#             from_user=True
+#         )
 
     def _build_clerkbot_page(self, parent_container):
         """Build ClerkBot (Chatbot) page"""
