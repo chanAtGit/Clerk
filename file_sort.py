@@ -118,7 +118,7 @@ def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None,
         return None
     
     try:
-        file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
 
         if not file_embeddings_dict:
             return None
@@ -157,7 +157,7 @@ def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None,
             return None
     finally:
         # Guarantee the embedding model unloads even if user cancels
-        unload_embedding_model()
+        if embedding_model_used: unload_embedding_model()
 
 
 def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
@@ -175,7 +175,7 @@ def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None,
         return None
 
     try:
-        file_embeddings_dict = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
         file_embeddings = np.array(list(file_embeddings_dict.values()))
 
         if check_cancel and check_cancel(): raise InterruptedError()
@@ -211,6 +211,7 @@ def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None,
 
         return dir_file_dict
     finally:
+        # Embedding model is always loaded in this function, so it must be unloaded
         unload_embedding_model()
 
 # --- Helper 2: LLM Inference Sequence ---

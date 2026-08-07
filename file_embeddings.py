@@ -89,7 +89,7 @@ def convert_pdf_to_img(pdf_path: str):
         images = convert_from_path(pdf_path)
     return images
 
-def clean_text(text):
+def clean_text(text) -> str:
     text = unicodedata.normalize('NFKD', text)
     text = text.lower()
     text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
@@ -109,7 +109,7 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
+def generate_pdf_mean_embedding(pdf_path: str, status_callback=None) -> np.ndarray | None:
     try:
         loader = PyPDFLoader(pdf_path)
         docs = loader.load()
@@ -131,7 +131,7 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None):
         if status_callback: status_callback(msg)
         return None
 
-def generate_docx_mean_embedding(docx_path: str, status_callback=None):
+def generate_docx_mean_embedding(docx_path: str, status_callback=None) -> np.ndarray | None:
     try:
         loader = UnstructuredWordDocumentLoader(docx_path, mode="single")
         docs = loader.load()
@@ -157,10 +157,12 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None):
         if status_callback: status_callback(msg)
         return None
 
-def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
+def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=None, progress_callback=None, check_cancel=None) -> tuple[dict, bool]:
+    ''' return a dictionary with elements in the key-value format of {file_name: mean_embedding} and a boolean value whether the embedding model is used '''
     if not files_list:
-        return None
+        return None, False
 
+    embedding_model_used:bool = False
     mean_embeddings = {}
     total_files = len(files_list)
     
@@ -182,7 +184,9 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         
         # If the cache misses
         if mean_embedding is None:
-            load_embedding_model(EMBEDDING_MODEL_NAME) # only load model if cache miss
+            if embedding_model_used is False:
+                load_embedding_model(EMBEDDING_MODEL_NAME) # only load model if cache miss
+                embedding_model_used = True
             # generate mean embedding
             match Path(file_path).suffix.lower():
                 case '.pdf':
@@ -202,9 +206,9 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
             progress_callback(int(((idx + 1) / total_files) * 50))
 
     if len(mean_embeddings) == 0:
-        return None
+        return None, embedding_model_used
     
-    return mean_embeddings
+    return mean_embeddings, embedding_model_used
 
 def get_directory_mean_embeddings(subdirectories: list) -> dict:
     # Find all subdirectories in the target directory
