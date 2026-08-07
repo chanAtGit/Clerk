@@ -5,11 +5,11 @@ from tkinter import ttk
 class ScrollableFrame(ttk.Frame):
     """A scrollable frame that can contain other widgets."""
 
-    def __init__(self, parent, **kwargs):
+    def __init__(self, parent, scroll_align:str = "right", **kwargs):
         super().__init__(parent, **kwargs)
 
         # Create a canvas and a vertical scrollbar for scrolling
-        self.canvas = tk.Canvas(self, width=250, height=300)
+        self.canvas = tk.Canvas(self, width=200, height=250)
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = ttk.Frame(self.canvas)
 
@@ -31,8 +31,12 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
         # Pack the canvas and scrollbar
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        if scroll_align == "right":
+            self.canvas.pack(side="left", fill="both", expand=True)
+            self.scrollbar.pack(side="right", fill="y")
+        else:
+            self.canvas.pack(side="right", fill="both", expand=True)
+            self.scrollbar.pack(side="left", fill="y")
 
 class SortingJobWidget(ttk.Frame):
     """Custom widget encapsulating the sorting progress UI components."""
@@ -100,3 +104,19 @@ class SortingJobWidget(ttk.Frame):
     def set_progress(self, val: float):
         """Helper method to update progress bar value."""
         self.progress_bar.config(value=val)
+
+class ChatWidget():
+    def __init__(self, parent, name: str, chatsession_id: str, func = None):
+        self.chatsession_id = chatsession_id
+        # 1. Create a Style object
+        style = ttk.Style()
+
+        # 2. Configure a custom style for the TButton class
+        style.configure(
+            "Custom.TButton",
+            font=("Helvetica", 10, "bold"),  # Font Size
+            anchor="w",  # Text Alignment ('w' = West/Left)
+        )
+
+        chat_name_btn = ttk.Button(parent, text=name, command = lambda: func(self.chatsession_id))
+        chat_name_btn.pack(fill=tk.X, padx=2, pady=2)

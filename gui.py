@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
-from widgets import SortingJobWidget, ScrollableFrame
+from widgets import SortingJobWidget, ScrollableFrame, ChatWidget
 
 class GUI:
 
@@ -195,6 +195,15 @@ class GUI:
         )
         sidebar_title.pack(anchor="w", pady=(20,0))
 
+        self.recent_chat_list = ScrollableFrame(self.sidebar_frame)
+        self.recent_chat_list.pack(fill=tk.BOTH, expand=True)
+
+        # def foo(x):
+        #     print(x)
+
+        # for i in range(50):
+        #     ChatWidget(self.recent_chat_list.scrollable_frame, str(i), str(i), foo)
+
     def _build_chat_window(self, parent_container):
         """Build the chat window area"""
         self.chat_frame = ttk.Frame(parent_container)
@@ -219,15 +228,17 @@ class GUI:
         )
 
         # 2. Pack chat content SECOND with expand=True so it fills the remaining top area
-        self.chat_content = scrolledtext.ScrolledText(
-            self.chat_frame,
-            height=10,
-            width=30,
-            padx=10,
-            pady=10,
-            font=("Arial", 12),
-            wrap=tk.WORD,
-        )
+        # self.chat_content = scrolledtext.ScrolledText(
+        #     self.chat_frame,
+        #     height=10,
+        #     width=30,
+        #     padx=10,
+        #     pady=10,
+        #     font=("Arial", 12),
+        #     wrap=tk.WORD,
+        # )
+        # self.chat_content.pack(fill=tk.BOTH, expand=True)
+        self.chat_content = ScrollableFrame(self.chat_frame)
         self.chat_content.pack(fill=tk.BOTH, expand=True)
 
     def _build_clerkbot_page(self, parent_container):
