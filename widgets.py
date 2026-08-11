@@ -123,7 +123,7 @@ class ChatWidget():
         chat_name_btn.pack(fill=tk.X, padx=2, pady=2)
 
 class TextBubble(ttk.Frame):
-    """A chat message bubble widget supporting markdown formatting and alignment."""
+    """A chat message bubble widget supporting markdown formatting, alignment, and auto-expanding multi-line text without scroll traps."""
 
     def __init__(self, parent, text: str, from_user: bool, **kwargs):
         super().__init__(parent, **kwargs)
@@ -151,7 +151,7 @@ class TextBubble(ttk.Frame):
         )
         bubble_frame.pack(side=align_side, anchor="e" if self.from_user else "w")
 
-        # Text widget for markdown rendering
+        # Text widget for markdown rendering (takefocus=0 prevents widget focus trapping)
         self.text_widget = tk.Text(
             bubble_frame,
             bg=bg_color,
@@ -162,7 +162,8 @@ class TextBubble(ttk.Frame):
             bd=0,
             highlightthickness=0,
             width=1,
-            height=1
+            height=1,
+            takefocus=0
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True)
 
@@ -170,6 +171,7 @@ class TextBubble(ttk.Frame):
         self._render_markdown(bg_code, fg_color)
         self.text_widget.config(state="disabled")
         self._adjust_size()
+        self._forward_scroll_events()
 
     def _render_markdown(self, bg_code: str, fg_code: str):
         """Parses basic Markdown formatting and applies Tkinter text tags."""
@@ -248,15 +250,46 @@ class TextBubble(ttk.Frame):
                 self.text_widget.insert(tk.END, text)
 
     def _adjust_size(self):
-        """Dynamically calculates width and height to fit text comfortably."""
+        """Dynamically calculates width and visual height with padding buffers."""
         lines = self.text.split("\n")
         max_line_len = max((len(l) for l in lines), default=0)
 
-        # Bound character width between 12 and 50 characters
-        calc_width = min(max(max_line_len + 2, 12), 50)
+        # Cap max bubble width to 45 chars
+        calc_width = min(max(max_line_len + 2, 12), 45)
         self.text_widget.config(width=calc_width)
 
-        # Force geometry calculation to get wrapped line count
+        # Force geometry calculation
         self.update_idletasks()
-        line_count = int(self.text_widget.index("end-1c").split(".")[0])
-        self.text_widget.config(height=line_count)
+
+        # Count visual display lines
+        display_lines = self.text_widget.count("1.0", "end-1c", "displaylines")
+        actual_height = display_lines[0] if display_lines else int(self.text_widget.index("end-1c").split(".")[0])
+
+        # Buffer 1: Headers (14pt) take more pixel height than default 10pt lines
+        header_count = sum(1 for line in lines if line.startswith("#"))
+        
+        # Buffer 2: Add +1 line padding for multi-line wrapped text or code blocks
+        extra_buffer = header_count + (1 if actual_height > 1 or "```" in self.text else 0)
+
+        self.text_widget.config(height=max(actual_height + extra_buffer, 1))
+
+    def _forward_scroll_events(self):
+        """Passes mouse wheel events to the parent ScrollableFrame canvas."""
+        def _on_mousewheel(event):
+            # Locate parent ScrollableFrame's canvas
+            widget = self.master
+            while widget and not isinstance(widget, ScrollableFrame):
+                widget = widget.master
+            
+            if widget and hasattr(widget, "canvas"):
+                if event.delta:
+                    widget.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif event.num == 4:
+                    widget.canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    widget.canvas.yview_scroll(1, "units")
+                return "break"
+
+        self.text_widget.bind("<MouseWheel>", _on_mousewheel)
+        self.text_widget.bind("<Button-4>", _on_mousewheel)
+        self.text_widget.bind("<Button-5>", _on_mousewheel)
