@@ -1,12 +1,12 @@
 import os
 import shutil
-import torch
+# import torch
 import numpy as np
 import re
 import ollama
 from pathlib import Path
 from huggingface_hub import login
-from transformers import AutoProcessor, AutoModelForMultimodalLM
+# from transformers import AutoProcessor, AutoModelForMultimodalLM
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
@@ -112,13 +112,9 @@ def insert_groups_dict(groups: dict, lab: str, file_name: str):
 def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     '''Group files into semantic clusters using VL embedding model and hierarchical clustering'''
     if check_cancel and check_cancel(): raise InterruptedError()
-    files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
-    if not files_list:
-        if status_callback: status_callback("No files found to cluster.")
-        return None
     
     try:
-        file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, status_callback, progress_callback, check_cancel)
 
         if not file_embeddings_dict:
             return None
@@ -164,18 +160,13 @@ def SortIntoFolders(dir_path: str, status_callback=None, progress_callback=None,
     '''Sort files into existing folders in the given directory'''
     if check_cancel and check_cancel(): raise InterruptedError()
 
-    files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
-    if not files_list:
-        if status_callback: status_callback("No files found.")
-        return None
-
     dir_list = [f for f in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, f))]
     if not dir_list:
         if status_callback: status_callback("No directories found.")
         return None
 
     try:
-        file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, files_list, status_callback, progress_callback, check_cancel)
+        file_embeddings_dict, _ = get_file_mean_embeddings(dir_path, status_callback, progress_callback, check_cancel)
         file_embeddings = np.array(list(file_embeddings_dict.values()))
 
         if check_cancel and check_cancel(): raise InterruptedError()

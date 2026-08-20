@@ -10,6 +10,9 @@ embedding_model = None
 processor = None
 llm = None
 
+EMBEDDING_MODEL_NAME = "Qwen/Qwen3-VL-Embedding-2B"
+
+
 # Synchronization Primitive
 cv = threading.Condition()
 current_model = None  # Tracks loaded model: None, "embedding", or "llm"

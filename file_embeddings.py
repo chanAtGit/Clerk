@@ -11,14 +11,15 @@ from pdf2image import convert_from_path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 
-from model_commons import load_embedding_model, embedding_encode
+from model_commons import load_embedding_model, embedding_encode, EMBEDDING_MODEL_NAME
+from database import ChatDB
 
-EMBEDDING_MODEL_NAME = "Qwen/Qwen3-VL-Embedding-2B"
 poppler_path = None
-cache = None 
+cache = None
+chatdb = ChatDB() 
 
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1500,
+    chunk_size=1000,
     chunk_overlap=0,
 )
 
@@ -33,11 +34,11 @@ def embeddings_init():
     if cache is None:
         cache = Cache('embedding-cache', limit=1000, evict='lru')
 
-def get_file_id(file_path: str):
+def get_file_id(file_path: str) -> int:
     # Fetch file system attributes
     stat_info = os.stat(file_path)
-    # Pair device ID and inode/file index
-    return (stat_info.st_dev, stat_info.st_ino)
+    # Get inode/file index
+    return stat_info.st_ino
 
 def store_cache_embedding(file_path: str, embedding):
     global cache
@@ -75,7 +76,11 @@ def get_cache_embedding(file_path: str):
     file_id = get_file_id(file_path)
     # get value (embedding) from id
     value = cache.get(file_id)
-    if value is None or os.path.getmtime(file_path) != value["modified_time"]: # cache miss or file has been modified
+    if value is None: # cache miss
+        return None
+
+    if os.path.getmtime(file_path) != value["modified_time"]: # file has been modified
+        chatdb.delete_file_chunks_by_id(file_id) # delete all existing records
         return None
     return value["embedding"]
 
@@ -111,20 +116,40 @@ def clean_text(text) -> str:
 
 def generate_pdf_mean_embedding(pdf_path: str, status_callback=None) -> np.ndarray | None:
     try:
+        file_id = get_file_id(pdf_path)
         loader = PyPDFLoader(pdf_path)
         docs = loader.load()
+
         if text_splitter.split_documents(docs):
-            text_chunks = text_splitter.split_documents(docs)
-            cleaned_sentences = [clean_text(str(chunk)) for chunk in text_chunks]
-            embeddings = embedding_encode(cleaned_sentences, convert_to_numpy=True)
-            return np.mean(embeddings, axis=0)
+            embeddings = []
+            for page, doc in enumerate(docs, start=1):
+                # per page processing
+                text_chunks = text_splitter.split_documents([doc])
+                for chunk in text_chunks:
+                    cleaned_sentence = clean_text(chunk.page_content)
+                    embedding = embedding_encode(cleaned_sentence, convert_to_numpy=True)
+                    chatdb.add_file_chunk_embedding(
+                        file_id, 
+                        os.path.basename(pdf_path), 
+                        page, 
+                        embedding, 
+                        cleaned_sentence)
+                    embeddings.append(embedding)
+            return np.mean(np.array(embeddings), axis=0)
         else:
             images = convert_pdf_to_img(pdf_path)
             embeddings = []
-            for img in images:
+            for page, img in enumerate(images, start=1):
                 img_embedding = embedding_encode(img, convert_to_numpy=True)
+                chatdb.add_file_chunk_embedding(
+                    file_id, 
+                    os.path.basename(pdf_path), 
+                    page, 
+                    img_embedding)
+                # Note: A special mechanism needs to be implemented when retrieving pages from pdfs 
+                # that cannot be split into chunks for RAG chat
                 embeddings.append(img_embedding)
-            return np.mean(embeddings, axis=0)
+            return np.mean(np.array(embeddings), axis=0)
     except Exception as e:
         msg = f"  → Error processing {pdf_path}: {e}"
         print(msg)
@@ -133,36 +158,78 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None) -> np.ndarr
 
 def generate_docx_mean_embedding(docx_path: str, status_callback=None) -> np.ndarray | None:
     try:
-        loader = UnstructuredWordDocumentLoader(docx_path, mode="single")
+        file_id = get_file_id(docx_path)
+        temp_pdf_path = "temp_doc.pdf"
+        convert(docx_path, temp_pdf_path)
+
+        loader = PyPDFLoader(temp_pdf_path)
         docs = loader.load()
-        text_chunks = text_splitter.split_documents(docs)
-        if text_chunks:
-            cleaned_sentences = [clean_text(str(chunk)) for chunk in text_chunks]
-            embeddings = embedding_encode(cleaned_sentences, convert_to_numpy=True)
-            return np.mean(embeddings, axis=0)
-        else:
-            temp_pdf_path = "temp_doc.pdf"
-            convert(docx_path, temp_pdf_path)
-            images = convert_pdf_to_img(temp_pdf_path)
-            if os.path.exists(temp_pdf_path):
-                os.remove(temp_pdf_path)
+
+        if text_splitter.split_documents(docs):
             embeddings = []
-            for img in images:
+            for page, doc in enumerate(docs, start=1):
+                # per page processing
+                text_chunks = text_splitter.split_documents([doc])
+                for chunk in text_chunks:
+                    cleaned_sentence = clean_text(chunk.page_content)
+                    embedding = embedding_encode(cleaned_sentence, convert_to_numpy=True)
+                    chatdb.add_file_chunk_embedding(
+                        file_id, 
+                        os.path.basename(docx_path), 
+                        page, 
+                        embedding, 
+                        cleaned_sentence)
+                    embeddings.append(embedding)
+            return np.mean(np.array(embeddings), axis=0)
+        else:
+            images = convert_pdf_to_img(temp_pdf_path)
+            embeddings = []
+            for page, img in enumerate(images, start=1):
                 img_embedding = embedding_encode(img, convert_to_numpy=True)
+                chatdb.add_file_chunk_embedding(
+                    file_id, 
+                    os.path.basename(docx_path), 
+                    page, 
+                    img_embedding)
+                # Note: A special mechanism needs to be implemented when retrieving pages from pdfs 
+                # that cannot be split into chunks for RAG chat
                 embeddings.append(img_embedding)
-            return np.mean(embeddings, axis=0)
+            return np.mean(np.array(embeddings), axis=0)
     except Exception as e:
         msg = f"  → Error processing {docx_path}: {e}"
         print(msg)
         if status_callback: status_callback(msg)
         return None
+    finally:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
 
-def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=None, progress_callback=None, check_cancel=None) -> tuple[dict, bool]:
+def generate_img_embedding(img_path: str, status_callback) -> np.ndarray | None:
+    try:
+        file_id = get_file_id(img_path)
+        img_embedding = embedding_encode(Image.open(img_path), convert_to_numpy=True)
+        chatdb.add_file_chunk_embedding(
+            file_id, 
+            os.path.basename(img_path), 
+            0, 
+            img_embedding
+        )
+        return img_embedding
+    except Exception as e:
+        msg = f"  → Error processing {img_path}: {e}"
+        print(msg)
+        if status_callback: status_callback(msg)
+        return None
+
+
+def get_file_mean_embeddings(dir_path: str, status_callback=None, progress_callback=None, check_cancel=None) -> tuple[dict, bool]:
     ''' return a dictionary with elements in the key-value format of {file_name: mean_embedding} and a boolean value whether the embedding model is used '''
+    files_list = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
     if not files_list:
+        if status_callback: status_callback("No files found to cluster.")
         return None, False
 
-    embedding_model_used:bool = False
+    embedding_model_used = False
     mean_embeddings = {}
     total_files = len(files_list)
     
@@ -184,7 +251,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
         
         # If the cache misses
         if mean_embedding is None:
-            if embedding_model_used is False:
+            if embedding_model_used == False:
                 load_embedding_model(EMBEDDING_MODEL_NAME) # only load model if cache miss
                 embedding_model_used = True
             # generate mean embedding
@@ -194,7 +261,7 @@ def get_file_mean_embeddings(dir_path: str, files_list: list, status_callback=No
                 case '.docx':
                     mean_embedding = generate_docx_mean_embedding(file_path, status_callback)
                 case '.png' | '.jpg' | '.jpeg' | '.avif' | '.bmp' | '.tiff'| '.webp':
-                    mean_embedding = embedding_encode(Image.open(file_path), convert_to_numpy=True)
+                    mean_embedding = generate_img_embedding(file_path, status_callback)
             if mean_embedding is not None: 
                 store_cache_embedding(file_path, mean_embedding)
             else:
@@ -239,7 +306,7 @@ def get_file_sample(file_path: str) -> str | list:
             case '.pdf':
                 loader = PyPDFLoader(file_path)
             case '.docx':
-                loader = UnstructuredWordDocumentLoader(file_path, mode="single")
+                loader = UnstructuredWordDocumentLoader(file_path)
             case _:
                 return "(Unsupported format)"
 

@@ -1,10 +1,12 @@
 import sqlite3
 import uuid
 import chromadb
+import numpy as np
+
 from datetime import datetime
 from dataclasses import dataclass
 
-from model_commons import load_embedding_model, unload_embedding_model, embedding_encode
+from model_commons import load_embedding_model, unload_embedding_model, embedding_encode, EMBEDDING_MODEL_NAME
 
 @dataclass
 class Inquiry:
@@ -99,3 +101,46 @@ class ChatDB():
         result = self.cur.fetchall()
         return result
 
+    def add_file_chunk_embedding(self, file_id: int, file_name: str, page_num:int, embedding: np.ndarray, chunk: str = None):
+        '''Add embedding to Chroma collection'''
+        chunk_id = uuid.uuid4().hex # generate id
+        collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
+        # add record
+        collection.add(
+            ids=[chunk_id],
+            documents=[chunk],
+            embeddings=[embedding],
+            metadatas=[{
+                "file_id": file_id,
+                "file_name": file_name,
+                "page": page_num
+            }]
+        )
+
+    def retrieve_file_chunk(self, prompt: str, file_id_list: list):
+        try:
+            collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
+            load_embedding_model(EMBEDDING_MODEL_NAME)
+
+            query_vector = embedding_encode(prompt)
+            results = collection.query(
+                query_embeddings=query_vector,
+                n_results=5,
+                include=["documents", "metadatas", "distances"],
+                where={"file_id": {"$in": file_id_list}} # file_id must be in the list
+            )
+
+            print(f"Retrieved {len(results['metadatas'][0])} file chunks from ChromaDB for prompt: {prompt}")
+            file_names = [meta["file_name"] for meta in results['metadatas'][0]]
+            print(file_names)
+            print(results['distances'][0])
+            return results
+        except Exception as e:
+            print(f"Something went wrong while retrieving file chunks: {e}")
+            return None
+        finally:
+            unload_embedding_model()
+
+    def delete_file_chunks_by_id(self, file_id: int):
+        collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
+        collection.delete(where={"file_id": file_id})

@@ -9,9 +9,10 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
+from file_embeddings import chatdb, get_file_id, get_file_mean_embeddings
+from model_commons import unload_embedding_model
 from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
 from chat_functions import get_chat_response
-from database import ChatDB
 
 class App:
 
@@ -26,11 +27,12 @@ class App:
         self.is_cancelled_all = False
 
         # Thread Executor and Helpers
-        self.executor = ThreadPoolExecutor(max_workers=3)
+        self.executor = ThreadPoolExecutor(max_workers=5)
         self.sorting_folders = []
 
-        # Database Initialization
-        self.database = ChatDB()
+        # Database
+        self.database = chatdb 
+        # They share the same memory address, so we can use the same instance of ChatDB across the app
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
@@ -205,6 +207,8 @@ class App:
 
     def chat_thread_worker(self, user_message):
         try:
+            if self.selected_path is None:
+                return
             # Display user's message in the chat content area
             TextBubble(
                 parent=self.chat_content.scrollable_frame,
@@ -219,9 +223,20 @@ class App:
             tk.Label(self.chat_content.scrollable_frame, 
                     text="Waiting for Clerkbot response...", 
                     font=("Arial", 10)).pack(anchor='w',pady=5)
+
+            # Update file embeddings in the target directory (for RAG)
+            get_file_mean_embeddings(self.selected_path)
+
+            # Retrieve file chunks from ChromaDB based on the user's message and the tracked files
+            file_id_list = [get_file_id(os.path.join(self.selected_path, f)) 
+                            for f in os.listdir(self.selected_path) 
+                            if os.path.isfile(os.path.join(self.selected_path, f))]
+            retrieved_context = chatdb.retrieve_file_chunk(user_message, file_id_list)
+
+            unload_embedding_model() # Safely unload embedding model
             
             # Simulate a response from ClerkBot (for demonstration purposes)
-            bot_response = get_chat_response(user_message)
+            bot_response = get_chat_response(user_message, retrieved_context, self.selected_path)
 
             # Remove loading message
             self.chat_content.scrollable_frame.winfo_children()[-1].destroy()

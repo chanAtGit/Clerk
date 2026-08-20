@@ -4,3 +4,5 @@ embedding-cache
 models
 tests
 poppler-26.02.0
+chatData.db
+clerk_vectordb
