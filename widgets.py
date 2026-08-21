@@ -43,6 +43,13 @@ class ScrollableFrame(ttk.Frame):
         self.update_idletasks()  # Force Tkinter to calculate new widget sizes first
         self.canvas.yview_moveto(1.0)  # Move scroll position to 100% (bottom)
 
+    def clear_content(self):
+        """Clears all widgets inside the scrollable frame."""
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        self.update_idletasks()  # Force Tkinter to calculate new widget sizes first
+        self.canvas.yview_moveto(0)  # Move scroll position to 0% (top)
+
 class SortingJobWidget(ttk.Frame):
     """Custom widget encapsulating the sorting progress UI components."""
 
@@ -110,22 +117,44 @@ class SortingJobWidget(ttk.Frame):
         """Helper method to update progress bar value."""
         self.progress_bar.config(value=val)
 
-class ChatWidget():
+class ChatWidget:
     '''Displayed on the sidebar, the user is transported to a chat session when clicked.'''
-    def __init__(self, parent, name: str, chatsession_id: str, func = None):
+    def __init__(self, parent, name: str, chatsession_id: str, go_to_func=None, delete_func=None):
         self.chatsession_id = chatsession_id
+
         # 1. Create a Style object
         style = ttk.Style()
-
-        # 2. Configure a custom style for the TButton class
         style.configure(
             "Custom.TButton",
-            font=("Helvetica", 10, "bold"),  # Font Size
-            anchor="w",  # Text Alignment ('w' = West/Left)
+            font=("Helvetica", 10, "bold"),
+            anchor="w",
         )
 
-        chat_name_btn = ttk.Button(parent, text=name, command = lambda: func(self.chatsession_id))
+        # 2. Create button
+        chat_name_btn = ttk.Button(
+            parent, 
+            text=name, 
+            style="Custom.TButton",
+            command=lambda: go_to_func(self.chatsession_id) if go_to_func else None
+        )
         chat_name_btn.pack(fill=tk.X, padx=2, pady=2)
+
+        # 3. Create right-click context menu
+        context_menu = tk.Menu(chat_name_btn, tearoff=0)
+        context_menu.add_command(
+            label="Delete",
+            command=lambda: delete_func(self.chatsession_id) if delete_func else None
+        )
+
+        def show_context_menu(event):
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                context_menu.grab_release()
+
+        # 4. Bind right-click event (<Button-3> for Windows/Linux, <Button-2> for macOS)
+        chat_name_btn.bind("<Button-3>", show_context_menu)
+        chat_name_btn.bind("<Button-2>", show_context_menu)
 
 class TextBubble(ttk.Frame):
     """A chat message bubble widget supporting markdown formatting, alignment, and auto-expanding multi-line text without scroll traps."""

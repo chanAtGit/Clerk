@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
-from file_embeddings import chatdb, get_file_id, get_file_mean_embeddings
+from file_embeddings import chat_db, get_file_id, get_file_mean_embeddings
 from model_commons import unload_embedding_model
 from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
 from chat_functions import get_chat_response
@@ -22,16 +22,17 @@ class App:
         self.root.geometry("950x650")
 
         # State Variables
-        self.selected_path = None
-        self.worker = None
-        self.is_cancelled_all = False
+        self.selected_path: str = None
+        self.is_cancelled_all: bool = False # Flag to determine if all sorting jobs are to be cancelled
+        self.chat_widget_list = [] # array containing existing chat sessions
+        self.current_chatId: str = None
 
         # Thread Executor and Helpers
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.sorting_folders = []
 
         # Database
-        self.database = chatdb 
+        self.database = chat_db 
         # They share the same memory address, so we can use the same instance of ChatDB across the app
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
@@ -193,9 +194,10 @@ class App:
             parent_container, width=250, relief="solid", padding=10
         )
         
-        tk.Button(self.sidebar_frame, text="💬 New Chat", font=("Arial", 12, "bold")).pack(
-            fill=tk.X, pady=2
-        )
+        tk.Button(self.sidebar_frame, 
+                  text="💬 New Chat", 
+                  font=("Arial", 12, "bold"), 
+                  command=self._create_new_chat).pack(fill=tk.X, pady=2)
 
         sidebar_title = ttk.Label(
             self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
@@ -205,10 +207,10 @@ class App:
         self.recent_chat_list = ScrollableFrame(self.sidebar_frame)
         self.recent_chat_list.pack(fill=tk.BOTH, expand=True)
 
+        # ChatWidget(self.recent_chat_list.scrollable_frame, "test", '123')
+
     def chat_thread_worker(self, user_message):
         try:
-            if self.selected_path is None:
-                return
             # Display user's message in the chat content area
             TextBubble(
                 parent=self.chat_content.scrollable_frame,
@@ -233,7 +235,7 @@ class App:
             file_id_list = [get_file_id(os.path.join(self.selected_path, f)) 
                             for f in os.listdir(self.selected_path) 
                             if os.path.isfile(os.path.join(self.selected_path, f))]
-            retrieved_context = chatdb.retrieve_file_chunk(user_message, file_id_list)
+            retrieved_context = self.database.retrieve_file_chunk(user_message, file_id_list)
 
             unload_embedding_model() # Safely unload embedding model
             
@@ -276,8 +278,14 @@ class App:
 
             self.executor.submit(self.chat_thread_worker, user_message)
 
-        self.input_btn = tk.Button(user_input_frame, text="⌯⌲", command=send_message, font=("Arial", 14))
+        self.input_btn = tk.Button(
+            user_input_frame, 
+            text="⌯⌲", 
+            command=send_message, 
+            font=("Arial", 14)
+            )
         self.input_btn.pack(side=tk.RIGHT)
+        self.input_btn.config(state=tk.DISABLED)
 
         self.chat_input = tk.Text(
                     user_input_frame, 
@@ -289,33 +297,29 @@ class App:
         self.chat_input.pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
         )
+        self.chat_input.config(state=tk.DISABLED)
 
         self.chat_content = ScrollableFrame(self.chat_frame)
         self.chat_content.pack(fill=tk.BOTH, expand=True)
 
-#         TextBubble(
-#             parent=self.chat_content.scrollable_frame,
-#             text="Can you summarize the **selected files**?",
-#             from_user=True
-#         )
+        # Starting message
+        TextBubble(
+            parent=self.chat_content.scrollable_frame,
+            text="Ask me anything about what's in the folder!",
+            from_user = False
+        )
 
-#         TextBubble(
-#             parent=self.chat_content.scrollable_frame,
-#             text="""Here you go!""",
-#             from_user=False
-#         )
-
-#         code_block = '''
-#         ```python
-# def hello_world():
-#     print("Hello, World!")
-# ```
-#         '''
-#         TextBubble(
-#             parent=self.chat_content.scrollable_frame,
-#             text=code_block,
-#             from_user=True
-#         )
+    def _create_new_chat(self):
+        # set state variables
+        self.current_chatId = None
+        # clear chat window
+        self.chat_content.clear_content()
+        # Add starting message
+        TextBubble(
+            parent=self.chat_content.scrollable_frame,
+            text="Ask me anything about what's in the folder!",
+            from_user = False
+        )
 
     def _build_clerkbot_page(self, parent_container):
         """Build ClerkBot (Chatbot) page"""
@@ -402,7 +406,7 @@ class App:
         self.page1.tkraise()
 
     # --- Directory and File Helper Methods ---
-    def display_files_in_dir(self, selected_dir: str):
+    def _display_files_in_dir(self, selected_dir: str):
         try:
             files = [
                 f
@@ -429,7 +433,9 @@ class App:
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
         self.tracking_dir_label.config(text=f"Folder: {re.split(r'[/\\]', dir_path)[-1]}")
-        self.display_files_in_dir(dir_path)
+        self.input_btn.config(state=tk.NORMAL) # enable the chat input button when a folder is selected
+        self.chat_input.config(state=tk.NORMAL)
+        self._display_files_in_dir(dir_path)
 
     def browse_folder(self):
         selected_dir = filedialog.askdirectory(title="Select a Directory")
@@ -463,7 +469,7 @@ class App:
     def refresh_folder(self):
         current_dir = self.path_entry.get()
         if current_dir:
-            self.display_files_in_dir(current_dir)
+            self._display_files_in_dir(current_dir)
 
     def on_select_file(self, event):
         selected_indices = self.file_listbox.curselection()
@@ -633,7 +639,7 @@ class App:
         finally:
             safe_set_progress(0 if self.is_cancelled_all or sorting_widget.is_cancel else 100)
             if self.path_entry.get() == current_dir: # the user is in browsing the current sorted directory
-                self.display_files_in_dir(current_dir) # Refresh the current directory
+                self._display_files_in_dir(current_dir) # Refresh the current directory
 
             # Delay 5 seconds and destroy the widget
             time.sleep(5)
