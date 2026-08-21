@@ -16,7 +16,7 @@ from database import ChatDB
 
 poppler_path = None
 cache = None
-chatdb = ChatDB() 
+chat_db = ChatDB() 
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
@@ -53,6 +53,7 @@ def store_cache_embedding(file_path: str, embedding):
         file_id = get_file_id(file_path)
         value = {
             "embedding": embedding,
+            "file_name": os.path.basename(file_path),
             "modified_time": os.path.getmtime(file_path) # get modification timestamp
         }
         # set key-value pair
@@ -80,8 +81,11 @@ def get_cache_embedding(file_path: str):
         return None
 
     if os.path.getmtime(file_path) != value["modified_time"]: # file has been modified
-        chatdb.delete_file_chunks_by_id(file_id) # delete all existing records
+        chat_db.delete_file_chunks_by_id(file_id) # delete all existing records
         return None
+
+    if os.path.basename(file_path) != value["file_name"]: # file has beem renamed
+        chat_db.rename_file_chunks_by_id(file_id, os.path.basename(file_path))
     return value["embedding"]
 
 def convert_pdf_to_img(pdf_path: str):
@@ -128,7 +132,7 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None) -> np.ndarr
                 for chunk in text_chunks:
                     cleaned_sentence = clean_text(chunk.page_content)
                     embedding = embedding_encode(cleaned_sentence, convert_to_numpy=True)
-                    chatdb.add_file_chunk_embedding(
+                    chat_db.add_file_chunk_embedding(
                         file_id, 
                         os.path.basename(pdf_path), 
                         page, 
@@ -141,7 +145,7 @@ def generate_pdf_mean_embedding(pdf_path: str, status_callback=None) -> np.ndarr
             embeddings = []
             for page, img in enumerate(images, start=1):
                 img_embedding = embedding_encode(img, convert_to_numpy=True)
-                chatdb.add_file_chunk_embedding(
+                chat_db.add_file_chunk_embedding(
                     file_id, 
                     os.path.basename(pdf_path), 
                     page, 
@@ -173,7 +177,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None) -> np.nda
                 for chunk in text_chunks:
                     cleaned_sentence = clean_text(chunk.page_content)
                     embedding = embedding_encode(cleaned_sentence, convert_to_numpy=True)
-                    chatdb.add_file_chunk_embedding(
+                    chat_db.add_file_chunk_embedding(
                         file_id, 
                         os.path.basename(docx_path), 
                         page, 
@@ -186,7 +190,7 @@ def generate_docx_mean_embedding(docx_path: str, status_callback=None) -> np.nda
             embeddings = []
             for page, img in enumerate(images, start=1):
                 img_embedding = embedding_encode(img, convert_to_numpy=True)
-                chatdb.add_file_chunk_embedding(
+                chat_db.add_file_chunk_embedding(
                     file_id, 
                     os.path.basename(docx_path), 
                     page, 
@@ -208,7 +212,7 @@ def generate_img_embedding(img_path: str, status_callback) -> np.ndarray | None:
     try:
         file_id = get_file_id(img_path)
         img_embedding = embedding_encode(Image.open(img_path), convert_to_numpy=True)
-        chatdb.add_file_chunk_embedding(
+        chat_db.add_file_chunk_embedding(
             file_id, 
             os.path.basename(img_path), 
             0, 

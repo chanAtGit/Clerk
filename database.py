@@ -141,6 +141,31 @@ class ChatDB():
         finally:
             unload_embedding_model()
 
+    def rename_file_chunks_by_id(self, file_id: int, new_name: str):
+        collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
+
+        # 1. Retrieve IDs and existing metadatas matching the filter
+        matching = collection.get(
+            where={"file_id": file_id},
+            include=["metadatas"]
+        )
+        
+        if not matching["ids"]:
+            return  # No records matched the given file_id
+
+        # 2. Build updated metadata dictionaries preserving existing key-value pairs
+        updated_metadatas = []
+        for meta in matching["metadatas"]:
+            current_meta = meta.copy() if meta else {}
+            current_meta["file_name"] = new_name
+            updated_metadatas.append(current_meta)
+
+        # 3. Perform the update with explicit IDs and metadatas
+        collection.update(
+            ids=matching["ids"],
+            metadatas=updated_metadatas
+        )
+
     def delete_file_chunks_by_id(self, file_id: int):
         collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
         collection.delete(where={"file_id": file_id})
