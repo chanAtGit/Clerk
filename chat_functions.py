@@ -1,13 +1,14 @@
 import os
 import shutil
 import uuid
+import ollama
 from PIL import Image
 
 from file_sort import LLM_NAME
 from file_embeddings import convert_pdf_to_img
 from model_commons import load_llm, unload_llm, llm_chat
 
-def get_chat_response(prompt: str, retrieved_context: list, dir_path: str) -> str:
+def get_chat_response(prompt: str, retrieved_context: list, dir_path: str, online: bool = False) -> str:
     '''Get chatbot message when using ClerkBot module'''
     try:
         # TODO: Add more advanced features. This is just a placeholder function with no chat memory.
@@ -20,14 +21,17 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str) -> st
         if retrieved_context is not None and len(retrieved_context) != 0:
             # 2 types of context: text and img
             for document, metadata, distance in zip(retrieved_context["documents"][0], retrieved_context["metadatas"][0], retrieved_context["distances"][0]):
-                if distance > 0.6:
-                    continue # skip retrieved documents with greater vector distance
+                # if distance > 0.6:
+                #     continue # skip retrieved documents with greater vector distance
                 file_path = os.path.join(dir_path, metadata["file_name"])
                 if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif')):
                     # retrieved an image
                     if os.path.exists(file_path):
                         content_list.append({"type": "image", "image": file_path})
-                        img_context.append(Image.open(file_path).convert("RGB"))
+                        if not online:
+                            img_context.append(Image.open(file_path).convert("RGB"))
+                        else:
+                            img_context.append(file_path) # for online LLM, just pass the file path
                 elif document == None:
                     # retrieved a file that cannot be text splitted (need to convert to image first)
                     os.makedirs(non_text_dir, exist_ok=True)
@@ -37,7 +41,16 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str) -> st
                     file_images[int(metadata["page"]) - 1].save(full_temp_path, "PNG") # save the image page
 
                     content_list.append({"type": "image", "image": full_temp_path})
-                    img_context.append(Image.open(full_temp_path).convert("RGB"))
+                    if not online:
+                        img_context.append(Image.open(full_temp_path).convert("RGB"))
+                    else:
+                        img_context.append(full_temp_path)
+
+                    text_context.append({
+                        "file_name": metadata["file_name"],
+                        "text_chunk": document,
+                        "page_number": metadata["page"]
+                    })
                 else:
                     # retrieved a file that can be text splitted (has text chunk)
                     text_context.append({
@@ -50,7 +63,9 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str) -> st
                 Consider the images above as context, as well as these retrieved document context below. \n
                 Document context: \n
                 {text_context} \n
-                Answer the user's prompt. You mustreference the file name and page number when you use information from a text chunk.\n
+                Answer the user's prompt. You must reference the file name and page number when you use information from a text chunk.\n
+                If there are no document or image context, mention that the files in the current directory do not provide any relevant information.
+                Instead, use your general knowledge to answer the question.\n
                 User prompt: {prompt}
                 '''
             content_list.append({"type": "text", "text": augmented_prompt})
@@ -59,13 +74,24 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str) -> st
          
         messages = [{"role": "user", "content": content_list}]
 
-        load_llm(LLM_NAME)
-        response = llm_chat(messages, img_context, max_tokens = 1024)
+        if not online:
+            load_llm(LLM_NAME)
+            response = llm_chat(messages, img_context, max_tokens = 1024)
+        else:
+            output = ollama.chat(
+                model="gemma4:cloud",  # Or use "gemma4:31b-cloud" for the dense model
+                messages=[{
+                    'role': 'user',
+                    'content': augmented_prompt,
+                    'images': img_context # Pass the path string or bytes directly
+                }]
+            )
+            response = output['message']['content']
 
         return response        
     except Exception as e:
         print(f"An error occured while chatting with LLM: {e}")
     finally:
-        unload_llm()
+        if not online: unload_llm()
         if os.path.exists(non_text_dir):
             shutil.rmtree(non_text_dir)

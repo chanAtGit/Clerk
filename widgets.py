@@ -38,6 +38,11 @@ class ScrollableFrame(ttk.Frame):
             self.canvas.pack(side="right", fill="both", expand=True)
             self.scrollbar.pack(side="left", fill="y")
 
+    def scroll_to_bottom(self):
+        """Scrolls the canvas to the very bottom."""
+        self.update_idletasks()  # Force Tkinter to calculate new widget sizes first
+        self.canvas.yview_moveto(1.0)  # Move scroll position to 100% (bottom)
+
 class SortingJobWidget(ttk.Frame):
     """Custom widget encapsulating the sorting progress UI components."""
 

@@ -224,6 +224,8 @@ class App:
                     text="Waiting for Clerkbot response...", 
                     font=("Arial", 10)).pack(anchor='w',pady=5)
 
+            self.chat_content.scroll_to_bottom()
+
             # Update file embeddings in the target directory (for RAG)
             get_file_mean_embeddings(self.selected_path)
 
@@ -236,22 +238,27 @@ class App:
             unload_embedding_model() # Safely unload embedding model
             
             # Simulate a response from ClerkBot (for demonstration purposes)
-            bot_response = get_chat_response(user_message, retrieved_context, self.selected_path)
+            bot_response = get_chat_response(user_message, retrieved_context, self.selected_path, online=self.use_online_llm.get())
 
             # Remove loading message
             self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
 
             # Add LLM response
-            TextBubble(
-                parent=self.chat_content.scrollable_frame,
-                text=bot_response,
-                from_user=False
-            )
+            if bot_response:
+                TextBubble(
+                    parent=self.chat_content.scrollable_frame,
+                    text=bot_response,
+                    from_user=False
+                )
+                self.chat_content.scroll_to_bottom()
         except Exception as e:
             print(f"An error occurred: {e}")
-            tk.Label(self.chat_content.scrollable_frame, 
-                                text=f"An error occurred: {e}", 
-                                font=("Arial", 10)).pack(anchor='w',pady=5)
+            TextBubble(
+                parent=self.chat_content.scrollable_frame,
+                text=f"An error occurred: {e}",
+                from_user=False
+            )
+            self.chat_content.scroll_to_bottom()
         
     def _build_chat_window(self, parent_container):
         """Build the chat window area"""
@@ -333,7 +340,7 @@ class App:
         )
         clerkbot_label.pack(anchor='w')
         self.tracking_dir_label = tk.Label(
-            top_bar, text=f"Tracking folder: None", font=("Arial", 9)
+            top_bar, text=f"Folder: None", font=("Arial", 9)
         )
         self.tracking_dir_label.pack(anchor='w')
 
@@ -421,7 +428,7 @@ class App:
     def _goto_folder(self, dir_path: str):
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
-        self.tracking_dir_label.config(text=f"Tracking folder: {re.split(r'[/\\]', dir_path)[-1]}")
+        self.tracking_dir_label.config(text=f"Folder: {re.split(r'[/\\]', dir_path)[-1]}")
         self.display_files_in_dir(dir_path)
 
     def browse_folder(self):
