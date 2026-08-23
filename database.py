@@ -11,74 +11,71 @@ from model_commons import load_embedding_model, unload_embedding_model, embeddin
 @dataclass
 class Inquiry:
     prompt: str
-    response: str|None
+    response: str | None
     chatSession_id: str
 
 class ChatDB():
     def __init__(self):
-        # Connect to SQLite database and create tables if they don't exist
         self.con = sqlite3.connect("chatData.db")
         self.cur = self.con.cursor()
-        # Create chatsessions table
+
+        self.cur.execute("PRAGMA foreign_keys = ON;")
+
+        # Create chatSessions table
         self.cur.execute(
-                    '''
-                    CREATE TABLE IF NOT EXISTS chatSessions (
-                        chatSession_id TEXT PRIMARY KEY,
-                        name TEXT,
-                        created_date DATETIME UNIQUE
-                    )
-                    '''
-                )
-        # Create inquiries table
+            '''
+            CREATE TABLE IF NOT EXISTS chatSessions (
+                chatSession_id TEXT PRIMARY KEY,
+                name TEXT,
+                created_date DATETIME
+            )
+            '''
+        )
+        # Create inquiries table with chatSession_id column included
         self.cur.execute(
-                    '''
-                    CREATE TABLE IF NOT EXISTS inquiries (
-                        inquiry_id TEXT PRIMARY KEY,
-                        prompt TEXT NOT NULL,
-                        response TEXT,
-                        chatSession_id TEXT,
-                        created_date DATETIME UNIQUE
-                    )
-                    '''
-                )
+            '''
+            CREATE TABLE IF NOT EXISTS inquiries (
+                inquiry_id TEXT PRIMARY KEY,
+                prompt TEXT NOT NULL,
+                response TEXT,
+                chatSession_id TEXT,
+                created_date DATETIME,
+                FOREIGN KEY (chatSession_id) REFERENCES chatSessions(chatSession_id) ON DELETE CASCADE
+            )
+            '''
+        )
         self.con.commit()
 
-        # Create Chroma client and collection for embeddings
         self.chroma_client = chromadb.PersistentClient(path="clerk_vectordb")
+        print("DB: Init complete.")
 
-    def create_chatsession(self, name: str):
-        '''Create chatsession record in sqlite'''
-        chatSession_id = uuid.uuid4().hex # generate id
-        created_date:datetime = datetime.now()
-        self.cursor.execute(
-            f'''
-            INSERT INTO chatSessions
-            VALUES (
-                {chatSession_id},
-                {name},
-                {created_date}
-            )
+    def create_chatsession(self, name: str) -> str:
+        chatSession_id = uuid.uuid4().hex
+        created_date = datetime.now()
+        self.cur.execute(
             '''
+            INSERT INTO chatSessions (chatSession_id, name, created_date)
+            VALUES (?, ?, ?)
+            ''',
+            (chatSession_id, name, created_date)
         )
         self.con.commit()
+        print(f"DB: Created chat session: {name}")
+        return chatSession_id
 
-    def create_inquiry(self, inquiry: Inquiry):
-        '''Create inquiry record in sqlite'''
-        inquiry_id = uuid.uuid4().hex # generate id
-        created_date:datetime = datetime.now()
-        self.cursor.execute(
-            f'''
-            INSERT INTO inquiries
-            VALUES (
-                {inquiry_id},
-                {inquiry.prompt},
-                {inquiry.response},
-                {inquiry.chatSession_id},
-                {created_date}
-            )
+    def create_inquiry(self, inquiry: Inquiry) -> str:
+        inquiry_id = uuid.uuid4().hex
+        created_date = datetime.now()
+        self.cur.execute(
             '''
+            INSERT INTO inquiries (inquiry_id, prompt, response, chatSession_id, created_date)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (inquiry_id, inquiry.prompt, inquiry.response, inquiry.chatSession_id, created_date)
         )
         self.con.commit()
+        print(f"DB: Created inquiry: {inquiry_id}")
+        return inquiry_id
 
     def get_all_chatsessions(self) -> list:
         self.cur.execute(
@@ -87,25 +84,59 @@ class ChatDB():
             ORDER BY created_date DESC
             '''
         )
-        result = self.cur.fetchall()
-        return result
+        print(f"DB: Got all chat sessions.")
+        return self.cur.fetchall()
 
     def get_inquiries_from_session(self, chatSession_id: str) -> list:
         self.cur.execute(
-                f'''
-                SELECT prompt, response FROM inquiries
-                WHERE chatSession_id == {chatSession_id}
-                ORDER BY created_date ASC
-                '''
+            '''
+            SELECT prompt, response FROM inquiries
+            WHERE chatSession_id = ?
+            ORDER BY created_date ASC
+            ''',
+            (chatSession_id,)
         )
-        result = self.cur.fetchall()
-        return result
+        print(f"DB: Got inquiries from session: {chatSession_id}")
+        return self.cur.fetchall()
 
-    def add_file_chunk_embedding(self, file_id: int, file_name: str, page_num:int, embedding: np.ndarray, chunk: str = None):
-        '''Add embedding to Chroma collection'''
-        chunk_id = uuid.uuid4().hex # generate id
+    def update_chatsession_name_by_id(self, chatSession_id: str, new_name: str):
+        self.cur.execute(
+            '''
+            UPDATE chatSessions
+            SET name = ?
+            WHERE chatSession_id = ?
+            ''',
+            (new_name, chatSession_id)
+        )
+        print(f"DB: Updated session {chatSession_id} with new name: {new_name}")
+        self.con.commit()
+
+    def update_inquiry_response_by_id(self, inquiry_id: str, response: str):
+        self.cur.execute(
+            '''
+            UPDATE inquiries
+            SET response = ?
+            WHERE inquiry_id = ?
+            ''',
+            (response, inquiry_id)
+        )
+        print(f"DB: Updated inquiry {inquiry_id} with response.")
+        self.con.commit()
+
+    def delete_chatsession_by_id(self, chatSession_id: str):
+        self.cur.execute(
+            '''
+            DELETE FROM chatSessions
+            WHERE chatSession_id = ?
+            ''',
+            (chatSession_id,)
+        )
+        print(f"DB: Deleted chat session with id {chatSession_id}")
+        self.con.commit()
+
+    def add_file_chunk_embedding(self, file_id: int, file_name: str, page_num: int, embedding: np.ndarray, chunk: str = None):
+        chunk_id = uuid.uuid4().hex
         collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
-        # add record
         collection.add(
             ids=[chunk_id],
             documents=[chunk],
@@ -127,13 +158,8 @@ class ChatDB():
                 query_embeddings=query_vector,
                 n_results=5,
                 include=["documents", "metadatas", "distances"],
-                where={"file_id": {"$in": file_id_list}} # file_id must be in the list
+                where={"file_id": {"$in": file_id_list}}
             )
-
-            print(f"Retrieved {len(results['metadatas'][0])} file chunks from ChromaDB for prompt: {prompt}")
-            file_names = [meta["file_name"] for meta in results['metadatas'][0]]
-            print(file_names)
-            print(results['distances'][0])
             return results
         except Exception as e:
             print(f"Something went wrong while retrieving file chunks: {e}")
@@ -143,24 +169,20 @@ class ChatDB():
 
     def rename_file_chunks_by_id(self, file_id: int, new_name: str):
         collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
-
-        # 1. Retrieve IDs and existing metadatas matching the filter
         matching = collection.get(
             where={"file_id": file_id},
             include=["metadatas"]
         )
         
         if not matching["ids"]:
-            return  # No records matched the given file_id
+            return
 
-        # 2. Build updated metadata dictionaries preserving existing key-value pairs
         updated_metadatas = []
         for meta in matching["metadatas"]:
             current_meta = meta.copy() if meta else {}
             current_meta["file_name"] = new_name
             updated_metadatas.append(current_meta)
 
-        # 3. Perform the update with explicit IDs and metadatas
         collection.update(
             ids=matching["ids"],
             metadatas=updated_metadatas
@@ -169,3 +191,8 @@ class ChatDB():
     def delete_file_chunks_by_id(self, file_id: int):
         collection = self.chroma_client.get_or_create_collection(name="file_embeddings")
         collection.delete(where={"file_id": file_id})
+
+    def close(self):
+        self.con.close()
+
+chat_db = ChatDB()

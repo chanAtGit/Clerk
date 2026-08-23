@@ -4,15 +4,17 @@ import subprocess
 import time
 import re
 import tkinter as tk
+import threading
 from tkinter import scrolledtext, filedialog, ttk
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
-from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups
-from file_embeddings import chat_db, get_file_id, get_file_mean_embeddings
+from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups, LLM_NAME
+from file_embeddings import get_file_id, get_file_mean_embeddings
 from model_commons import unload_embedding_model
 from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
-from chat_functions import get_chat_response
+from chat_functions import get_chat_response, get_new_chat_title
+from database import chat_db, ChatDB, Inquiry
 
 class App:
 
@@ -24,8 +26,7 @@ class App:
         # State Variables
         self.selected_path: str = None
         self.is_cancelled_all: bool = False # Flag to determine if all sorting jobs are to be cancelled
-        self.chat_widget_list = [] # array containing existing chat sessions
-        self.current_chatId: str = None
+        self.current_chat_id: str = None
 
         # Thread Executor and Helpers
         self.executor = ThreadPoolExecutor(max_workers=5)
@@ -34,6 +35,10 @@ class App:
         # Database
         self.database = chat_db 
         # They share the same memory address, so we can use the same instance of ChatDB across the app
+        self.chat_session_list = self.database.get_all_chatsessions() 
+        # chat session list contains tuples in the form of (chat_id, chat_name)
+        self.chat_inprogress_list = []
+        # list of chat session id with its corresponding chat awaiting bot response 
 
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
@@ -189,6 +194,19 @@ class App:
         # Sticky "nsew" fills both vertical and horizontal space
         self.sorting_jobs_list.grid(row=3, column=0, sticky="nsew", pady=5)
 
+    def _reload_chat_list(self, parent_container):
+        """reload the recent chat list in the sidebar"""
+        # Clear all ChatWidgets (if any)
+        for widget in parent_container.winfo_children():
+            widget.destroy()
+
+        # add the chat widgets
+        for chat_id, chat_name in self.chat_session_list:
+            ChatWidget(parent_container, chat_name, chat_id, 
+                       go_to_func=self._load_chatsession_chats,
+                       delete_func=self._delete_chatsession)
+        print("Reloaded chat_list.")
+        
     def _build_sidebar(self, parent_container):
         self.sidebar_frame = ttk.Frame(
             parent_container, width=250, relief="solid", padding=10
@@ -197,7 +215,7 @@ class App:
         tk.Button(self.sidebar_frame, 
                   text="💬 New Chat", 
                   font=("Arial", 12, "bold"), 
-                  command=self._create_new_chat).pack(fill=tk.X, pady=2)
+                  command=self._open_new_chat).pack(fill=tk.X, pady=2)
 
         sidebar_title = ttk.Label(
             self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
@@ -208,25 +226,50 @@ class App:
         self.recent_chat_list.pack(fill=tk.BOTH, expand=True)
 
         # ChatWidget(self.recent_chat_list.scrollable_frame, "test", '123')
+        self._reload_chat_list(self.recent_chat_list.scrollable_frame)
 
-    def chat_thread_worker(self, user_message):
+    def chat_thread_worker(self, user_message: str, chat_id: str):
         try:
-            # Display user's message in the chat content area
-            TextBubble(
-                parent=self.chat_content.scrollable_frame,
-                text=user_message,
-                from_user=True
-            )
-            
+            temp_db = ChatDB()
+            creating_new_chat: bool = (chat_id == None)
             # Clear the input field
             self.root.after(0, self.chat_input.delete("1.0", tk.END))
 
-            # Display loading message
-            tk.Label(self.chat_content.scrollable_frame, 
-                    text="Waiting for Clerkbot response...", 
-                    font=("Arial", 10)).pack(anchor='w',pady=5)
+            # Display user's message in the chat window
+            if self.current_chat_id == chat_id:
+                TextBubble(
+                    parent=self.chat_content.scrollable_frame,
+                    text=user_message,
+                    from_user=True
+                )
 
-            self.chat_content.scroll_to_bottom()
+                # Display loading message
+                tk.Label(self.chat_content.scrollable_frame, 
+                        text="Waiting for Clerkbot response...", 
+                        font=("Arial", 10)).pack(anchor='w',pady=5)
+
+                self.chat_content.scroll_to_bottom()
+
+            bot_response: str = None
+
+            # Create new chat session record in database if chat_id is none (meaning this is a new chat)
+            if creating_new_chat:
+                chat_id = temp_db.create_chatsession("Pending chat title...")
+                new_chat_session = (chat_id, "Pending chat title...")
+                self.chat_session_list.insert(0, new_chat_session) # insert at the beginning of the list
+                self._reload_chat_list(self.recent_chat_list.scrollable_frame)
+
+                if self.current_chat_id == None: # The user is staying on the newly created chat
+                    self.current_chat_id = chat_id
+
+            self.chat_inprogress_list.append(chat_id)
+            if self.current_chat_id in self.chat_inprogress_list:
+                self.chat_input.config(state=tk.DISABLED)
+                self.input_btn.config(state=tk.DISABLED)
+
+            # Create new inquiry record (with no response)
+            new_inquiry = Inquiry(user_message, bot_response, chat_id)
+            new_inquiry_id = temp_db.create_inquiry(new_inquiry)
 
             # Update file embeddings in the target directory (for RAG)
             get_file_mean_embeddings(self.selected_path)
@@ -235,32 +278,68 @@ class App:
             file_id_list = [get_file_id(os.path.join(self.selected_path, f)) 
                             for f in os.listdir(self.selected_path) 
                             if os.path.isfile(os.path.join(self.selected_path, f))]
-            retrieved_context = self.database.retrieve_file_chunk(user_message, file_id_list)
+            retrieved_context = temp_db.retrieve_file_chunk(user_message, file_id_list)
 
             unload_embedding_model() # Safely unload embedding model
-            
-            # Simulate a response from ClerkBot (for demonstration purposes)
-            bot_response = get_chat_response(user_message, retrieved_context, self.selected_path, online=self.use_online_llm.get())
 
-            # Remove loading message
-            self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
+            new_title = []
+            create_title_thread = threading.Thread(
+                target=get_new_chat_title, 
+                args=(user_message, new_title, 
+                      creating_new_chat, 
+                      self.use_online_llm.get())
+            )
+            create_title_thread.start()
+            # Get a response from ClerkBot
+            bot_response = get_chat_response(
+                user_message, 
+                retrieved_context, 
+                self.selected_path, 
+                online=self.use_online_llm.get()
+                )
 
-            # Add LLM response
+            create_title_thread.join() # wait for create title thread to finish before continuing
+
+            # Update chat session's name if user input in a newly created chat
+            if creating_new_chat:
+                temp_db.update_chatsession_name_by_id(chat_id, new_title[0])
+                # update chat_session_list
+                for i, (chat_id_iter, _) in enumerate(self.chat_session_list):
+                    if chat_id_iter == chat_id:
+                        self.chat_session_list[i] = (chat_id, new_title[0])
+                        break
+                self._reload_chat_list(self.recent_chat_list.scrollable_frame)
+
+            # Handle LLM response
             if bot_response:
+                temp_db.update_inquiry_response_by_id(new_inquiry_id, bot_response)
+                if self.current_chat_id == chat_id:
+                    # Remove loading message
+                    self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
+                    # Append and display LLM Response in chat window
+                    TextBubble(
+                        parent=self.chat_content.scrollable_frame,
+                        text=bot_response,
+                        from_user=False
+                    )
+                    self.chat_content.scroll_to_bottom()
+
+        except Exception as e:
+            if self.current_chat_id == chat_id:
+                self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
                 TextBubble(
                     parent=self.chat_content.scrollable_frame,
-                    text=bot_response,
+                    text=f"An error occurred: {e}",
                     from_user=False
                 )
                 self.chat_content.scroll_to_bottom()
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            TextBubble(
-                parent=self.chat_content.scrollable_frame,
-                text=f"An error occurred: {e}",
-                from_user=False
-            )
-            self.chat_content.scroll_to_bottom()
+        finally:
+            # lift restriction on chat_input and input_btn
+            if self.current_chat_id in self.chat_inprogress_list:
+                self.chat_input.config(state=tk.NORMAL)
+                self.input_btn.config(state=tk.NORMAL)
+                self.chat_inprogress_list.remove(chat_id)
+            temp_db.close()
         
     def _build_chat_window(self, parent_container):
         """Build the chat window area"""
@@ -273,10 +352,9 @@ class App:
 
         def send_message():
             user_message = self.chat_input.get("1.0", tk.END).strip()
-            if not user_message:
+            if not (user_message and self.selected_path):
                 return
-
-            self.executor.submit(self.chat_thread_worker, user_message)
+            self.executor.submit(self.chat_thread_worker, user_message, self.current_chat_id)
 
         self.input_btn = tk.Button(
             user_input_frame, 
@@ -285,7 +363,6 @@ class App:
             font=("Arial", 14)
             )
         self.input_btn.pack(side=tk.RIGHT)
-        self.input_btn.config(state=tk.DISABLED)
 
         self.chat_input = tk.Text(
                     user_input_frame, 
@@ -297,7 +374,6 @@ class App:
         self.chat_input.pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
         )
-        self.chat_input.config(state=tk.DISABLED)
 
         self.chat_content = ScrollableFrame(self.chat_frame)
         self.chat_content.pack(fill=tk.BOTH, expand=True)
@@ -309,9 +385,9 @@ class App:
             from_user = False
         )
 
-    def _create_new_chat(self):
+    def _open_new_chat(self):
         # set state variables
-        self.current_chatId = None
+        self.current_chat_id = None
         # clear chat window
         self.chat_content.clear_content()
         # Add starting message
@@ -320,6 +396,66 @@ class App:
             text="Ask me anything about what's in the folder!",
             from_user = False
         )
+        # config chat_input and input_btn
+        self.chat_input.config(state=tk.NORMAL)
+        self.input_btn.config(state=tk.NORMAL)
+
+    def _load_chatsession_chats(self, chatsession_id: str):
+        '''Load all previous conversations from chatsession to chat window'''
+        if self.current_chat_id == chatsession_id:
+            return
+        
+        self.current_chat_id = chatsession_id
+        # clear chat window
+        self.chat_content.clear_content()
+
+        prev_convs = self.database.get_inquiries_from_session(chatsession_id)
+        # Add starting message
+        TextBubble(
+            parent=self.chat_content.scrollable_frame,
+            text="Ask me anything about what's in the folder!",
+            from_user = False
+        )
+        for user_message, bot_message in prev_convs:
+            TextBubble(
+                parent=self.chat_content.scrollable_frame,
+                text=user_message,
+                from_user = True
+            )
+            if bot_message:
+                TextBubble(
+                    parent=self.chat_content.scrollable_frame,
+                    text=bot_message,
+                    from_user = False
+                )  
+            else:
+                tk.Label(self.chat_content.scrollable_frame, 
+                                        text="Waiting for Clerkbot response...", 
+                                        font=("Arial", 10)).pack(anchor='w',pady=5)
+        self.chat_content.scroll_to_bottom()
+
+        if chatsession_id in self.chat_inprogress_list:
+            self.chat_input.config(state=tk.DISABLED)
+            self.input_btn.config(state=tk.DISABLED)
+        else:
+            self.chat_input.config(state=tk.NORMAL)
+            self.input_btn.config(state=tk.NORMAL)
+
+    def _delete_chatsession(self, chatsession_id:str):
+        if self.current_chat_id == chatsession_id:
+            # user is currently accessing the chat session that is about to be deleted
+            self._open_new_chat()
+        self.database.delete_chatsession_by_id(chatsession_id)
+
+        # Delete the chat session (id, name) from self.chat_session_list
+        for i, (chat_id, _) in enumerate(self.chat_session_list):
+            if chat_id == chatsession_id:
+                del self.chat_session_list[i]
+                break
+
+        # reload recent chat list in sidebar
+        self._reload_chat_list(self.recent_chat_list.scrollable_frame)
+
 
     def _build_clerkbot_page(self, parent_container):
         """Build ClerkBot (Chatbot) page"""
@@ -433,8 +569,6 @@ class App:
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
         self.tracking_dir_label.config(text=f"Folder: {re.split(r'[/\\]', dir_path)[-1]}")
-        self.input_btn.config(state=tk.NORMAL) # enable the chat input button when a folder is selected
-        self.chat_input.config(state=tk.NORMAL)
         self._display_files_in_dir(dir_path)
 
     def browse_folder(self):

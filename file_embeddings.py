@@ -12,11 +12,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 
 from model_commons import load_embedding_model, embedding_encode, EMBEDDING_MODEL_NAME
-from database import ChatDB
+from database import chat_db
 
 poppler_path = None
 cache = None
-chat_db = ChatDB() 
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
