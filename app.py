@@ -10,8 +10,8 @@ from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups, LLM_NAME
-from file_embeddings import get_file_id, get_file_mean_embeddings
-from model_commons import unload_embedding_model
+from file_embeddings import embeddings_init, get_file_id, get_file_mean_embeddings
+from model_commons import models_init, unload_embedding_model
 from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
 from chat_functions import get_chat_response, get_new_chat_title
 from database import chat_db, ChatDB, Inquiry
@@ -22,6 +22,10 @@ class App:
         self.root = root
         self.root.title("Clerk")
         self.root.geometry("950x650")
+
+        # Initalize models and embeddings
+        models_init()
+        embeddings_init()
 
         # State Variables
         self.selected_path: str = None
@@ -82,20 +86,20 @@ class App:
         directory_frame.columnconfigure(2, weight=1)
 
         ttk.Button(
-            directory_frame, image=self.prev_icon, command=self.prev_folder
+            directory_frame, image=self.prev_icon, command=self.prev_folder, cursor="hand2"
         ).grid(row=0, column=0)
         ttk.Button(
-            directory_frame, image=self.next_icon, command=self.next_folder
+            directory_frame, image=self.next_icon, command=self.next_folder, cursor="hand2"
         ).grid(row=0, column=1)
 
         self.path_entry = ttk.Entry(directory_frame, width=40)
         self.path_entry.grid(row=0, column=2, sticky="ew", padx=2)
 
         ttk.Button(
-            directory_frame, image=self.reload_icon, command=self.refresh_folder
+            directory_frame, image=self.reload_icon, command=self.refresh_folder, cursor="hand2"
         ).grid(row=0, column=3)
         ttk.Button(
-            directory_frame, text="Browse...", command=self.browse_folder
+            directory_frame, text="Browse...", command=self.browse_folder, cursor="hand2"
         ).grid(row=0, column=4)
 
         list_frame = ttk.Frame(directory_frame)
@@ -173,6 +177,7 @@ class App:
             command=self.semantic_file_sort,
             width=8,
             font=("Arial", 11),
+            cursor="hand2"
         )
         self.sort_btn.pack(side=tk.LEFT)
 
@@ -183,6 +188,7 @@ class App:
             width=8,
             font=("Arial", 11),
             state=tk.DISABLED,
+            cursor="hand2"
         )
         self.cancel_all_btn.pack(side=tk.RIGHT)
 
@@ -215,7 +221,8 @@ class App:
         tk.Button(self.sidebar_frame, 
                   text="💬 New Chat", 
                   font=("Arial", 12, "bold"), 
-                  command=self._open_new_chat).pack(fill=tk.X, pady=2)
+                  command=self._open_new_chat,
+                  cursor="hand2").pack(fill=tk.X, pady=2)
 
         sidebar_title = ttk.Label(
             self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
@@ -360,7 +367,8 @@ class App:
             user_input_frame, 
             text="⌯⌲", 
             command=send_message, 
-            font=("Arial", 14)
+            font=("Arial", 14),
+            cursor="hand2"
             )
         self.input_btn.pack(side=tk.RIGHT)
 
@@ -458,41 +466,76 @@ class App:
 
 
     def _build_clerkbot_page(self, parent_container):
-        """Build ClerkBot (Chatbot) page"""
-        self.page2 = ttk.Frame(parent_container, relief="groove", padding=10)
-        self.page2.grid(row=0, column=0, sticky="nsew")
+            """Build ClerkBot (Chatbot) page"""
+            self.page2 = ttk.Frame(parent_container, relief="groove", padding=10)
+            self.page2.grid(row=0, column=0, sticky="nsew")
 
-        self.sidebar_visible = False
+            self.sidebar_visible = False
 
-        # --- Top Header Bar ---
-        top_bar = ttk.Frame(self.page2)
-        top_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+            # --- Top Header Bar ---
+            top_bar = ttk.Frame(self.page2)
+            top_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
 
-        # Menu Toggle Button
-        self.sidebar_btn = ttk.Button(
-            top_bar, text="☰", width=8, command=self._toggle_sidebar
-        )
-        self.sidebar_btn.pack(side=tk.LEFT, padx=(0, 10))
+            # Menu Toggle Button
+            self.sidebar_btn = ttk.Button(
+                top_bar, text="☰", width=8, command=self._toggle_sidebar, cursor="hand2"
+            )
+            self.sidebar_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        # Title Label
-        clerkbot_label = tk.Label(
-            top_bar, text="Ask ClerkBot!", font=("Arial", 16, "bold")
-        )
-        clerkbot_label.pack(anchor='w')
-        self.tracking_dir_label = tk.Label(
-            top_bar, text=f"Folder: None", font=("Arial", 9)
-        )
-        self.tracking_dir_label.pack(anchor='w')
+            # Header Info Container
+            header_info_frame = ttk.Frame(top_bar)
+            header_info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # --- Body Area Container ---
-        body_container = ttk.Frame(self.page2)
-        body_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            # Title Row containing "Ask ClerkBot!" and the toggle button
+            title_row = ttk.Frame(header_info_frame)
+            title_row.pack(side=tk.TOP, anchor='w')
 
-        # --- Main Content Area - Chat Zone ---
-        self._build_chat_window(body_container)
+            clerkbot_label = tk.Label(
+                title_row, text="Ask ClerkBot!", font=("Arial", 16, "bold")
+            )
+            clerkbot_label.pack(side=tk.LEFT)
 
-        # --- Overlay Sidebar Frame ---
-        self._build_sidebar(body_container)
+            # LLM Toggle Button (placed to the right of clerkbot_label)
+            def toggle_llm():
+                self.use_online_llm.set(not self.use_online_llm.get())
+
+            self.llm_toggle_btn = tk.Button(
+                title_row,
+                text= "ᯤOnline" if self.use_online_llm.get() else "💻Local",
+                borderwidth=0,          # Removes the standard button border
+                relief="flat",          # Ensures the button style is flat
+                highlightthickness=0,   # No extra highlight border from appearing when the button is clicked 
+                command=toggle_llm,
+                width=7,
+                font=("Arial", 11),
+                cursor="hand2",
+                bg="blue" if self.use_online_llm.get() else "green"
+            )
+            self.llm_toggle_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+            # Update button text automatically whenever self.use_online_llm changes
+            def update_llm_btn_text(*args):
+                self.llm_toggle_btn.config(
+                    text= "ᯤOnline" if self.use_online_llm.get() else "💻Local",
+                    background="blue" if self.use_online_llm.get() else "green"
+                )
+
+            self.use_online_llm.trace_add("write", update_llm_btn_text)
+
+            self.tracking_dir_label = tk.Label(
+                header_info_frame, text="Folder: None", font=("Arial", 9)
+            )
+            self.tracking_dir_label.pack(anchor='w')
+
+            # --- Body Area Container ---
+            body_container = ttk.Frame(self.page2)
+            body_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+            # --- Main Content Area - Chat Zone ---
+            self._build_chat_window(body_container)
+
+            # --- Overlay Sidebar Frame ---
+            self._build_sidebar(body_container)
 
     def _toggle_sidebar(self):
         """Show or hide the sidebar overlay using place()"""
@@ -518,12 +561,12 @@ class App:
         nav_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
 
         btn_page1 = ttk.Button(
-            nav_frame, text="File Sort", command=lambda: self.page1.tkraise()
+            nav_frame, text="File Sort", command=lambda: self.page1.tkraise(), cursor="hand2"
         )
         btn_page1.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
 
         btn_page2 = ttk.Button(
-            nav_frame, text="ClerkBot", command=lambda: self.page2.tkraise()
+            nav_frame, text="ClerkBot", command=lambda: self.page2.tkraise(), cursor="hand2"
         )
         btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
 
@@ -653,10 +696,10 @@ class App:
         btn_frame = tk.Frame(popup)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
 
-        confirm_btn = tk.Button(btn_frame, text="Confirm", width=12, command=confirm_sorting)
+        confirm_btn = tk.Button(btn_frame, text="Confirm", width=12, command=confirm_sorting, cursor="hand2")
         confirm_btn.pack(side=tk.LEFT, padx=40)
 
-        reject_btn = tk.Button(btn_frame, text="Reject", width=12, command=reject_sorting)
+        reject_btn = tk.Button(btn_frame, text="Reject", width=12, command=reject_sorting, cursor="hand2")
         reject_btn.pack(side=tk.RIGHT, padx=40)
 
         sorting_info = scrolledtext.ScrolledText(popup, height=20, width=65, font=("Arial", 10), wrap=tk.WORD)

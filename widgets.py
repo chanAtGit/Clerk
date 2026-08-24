@@ -96,7 +96,7 @@ class SortingJobWidget(ttk.Frame):
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
         self.cancel_btn = ttk.Button(
-            controls_frame, text="Cancel", command=cancel_sorting
+            controls_frame, text="Cancel", command=cancel_sorting, cursor="hand2"
         )
         self.cancel_btn.pack(side=tk.RIGHT)
 
@@ -135,7 +135,8 @@ class ChatWidget:
             parent, 
             text=name, 
             style="Custom.TButton",
-            command=lambda: go_to_func(self.chatsession_id) if go_to_func else None
+            command=lambda: go_to_func(self.chatsession_id) if go_to_func else None,
+            cursor="hand2"
         )
         chat_name_btn.pack(fill=tk.X, padx=2, pady=2)
 
