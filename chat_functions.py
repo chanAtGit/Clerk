@@ -104,6 +104,7 @@ def get_chat_response(prompt: str, retrieved_context: list, history: list, dir_p
 
         system_prompt = '''
                 Answer the user's prompt. You must reference the file name and page number when you use information from a text chunk.\n
+                The reference must be in the format: (file_name, page_number). \n
                 If there are no document or image context, mention that the files in the current directory do not provide any relevant information.
                 Instead, use your general knowledge to answer the question.\n
                 ''' 

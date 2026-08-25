@@ -127,15 +127,16 @@ class App:
         self.page1.grid_propagate(False)
         self.page1.rowconfigure(0, weight=0)
         self.page1.rowconfigure(1, weight=0)
-        self.page1.rowconfigure(2, weight=0)
-        self.page1.rowconfigure(3, weight=1)  # <--- Allow row 3 to expand vertically
+        self.page1.rowconfigure(2, weight=1)
         self.page1.columnconfigure(0, weight=1)
 
         # OPTIONS PANEL
         options_panel = ttk.Frame(self.page1)
-        options_panel.grid(row=0, column=0, sticky="w", pady=5)
+        options_panel.grid(row=0, column=0, sticky="ew", pady=5)
 
-        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Helvetica", 12, "bold"))
+        tk.Label(options_panel, text="File Sort", font=("Helvetica", 15, "bold")).pack(anchor="center")
+
+        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Arial", 10, "bold"))
         mode_label.pack(anchor="w")
         rb1 = tk.Radiobutton(
                 options_panel,
@@ -192,13 +193,16 @@ class App:
         )
         self.cancel_all_btn.pack(side=tk.RIGHT)
 
-        sorting_jobs_label = tk.Label(self.page1, text="Current sorting jobs", font=("Helvetica", 10, "underline"))
-        sorting_jobs_label.grid(row=2, column=0, sticky="w", pady=5)
+        sorting_jobs_frame = ttk.Frame(self.page1, relief='solid')
+        sorting_jobs_frame.grid(row=2, column=0, sticky="nsew", pady=5)
+        
+        sorting_jobs_label = tk.Label(sorting_jobs_frame, text="Current sorting jobs", font=("Helvetica", 11, "underline"))
+        sorting_jobs_label.pack(anchor="center", pady=5)
 
         # Instantiating the standalone scrollable container to store current sorting jobs
-        self.sorting_jobs_list = ScrollableFrame(self.page1)
+        self.sorting_jobs_list = ScrollableFrame(sorting_jobs_frame)
         # Sticky "nsew" fills both vertical and horizontal space
-        self.sorting_jobs_list.grid(row=3, column=0, sticky="nsew", pady=5)
+        self.sorting_jobs_list.pack(fill=tk.BOTH, expand=True, padx=2)
 
     def _reload_chat_list(self, parent_container):
         """reload the recent chat list in the sidebar"""
@@ -262,7 +266,8 @@ class App:
                 # Display loading message
                 tk.Label(self.chat_content.scrollable_frame, 
                         text="Waiting for Clerkbot response...", 
-                        font=("Arial", 10)).pack(anchor='w',pady=5, padx=2)
+                        font=("Arial", 10),
+                        fg="orange").pack(anchor='w',pady=5, padx=5)
 
                 self.chat_content.scroll_to_bottom()
 
@@ -381,18 +386,21 @@ class App:
         self.input_btn = tk.Button(
             user_input_frame, 
             text="⌯⌲", 
-            command=send_message, 
-            font=("Arial", 14),
+            command=send_message,
+            bg="gray",
+            fg="white",
+            font=("Arial", 15),
             cursor="hand2"
             )
-        self.input_btn.pack(side=tk.RIGHT)
+        self.input_btn.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.chat_input = tk.Text(
                     user_input_frame, 
                     height=3, 
                     padx=10,
                     pady=10,
-                    font=("Arial", 11)
+                    wrap=tk.WORD,
+                    font=("Arial", 10)
                     )
         self.chat_input.pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
@@ -464,7 +472,8 @@ class App:
             else:
                 tk.Label(self.chat_content.scrollable_frame, 
                                         text="Waiting for Clerkbot response...", 
-                                        font=("Arial", 10)).pack(anchor='w',pady=5, padx=2)
+                                        font=("Arial", 10),
+                                        fg="orange").pack(anchor='w',pady=5, padx=5)
         self.chat_content.scroll_to_bottom()
 
         if chatsession_id in self.chat_inprogress_list:
@@ -505,18 +514,18 @@ class App:
             self.sidebar_btn = ttk.Button(
                 top_bar, text="☰", width=8, command=self._toggle_sidebar, cursor="hand2"
             )
-            self.sidebar_btn.pack(side=tk.LEFT, padx=(0, 10))
+            self.sidebar_btn.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
             # Header Info Container
             header_info_frame = ttk.Frame(top_bar)
             header_info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-            # Title Row containing "Ask ClerkBot!" and the toggle button
+            # Title Row containing "ClerkBot" and the toggle button
             title_row = ttk.Frame(header_info_frame)
-            title_row.pack(side=tk.TOP, anchor='w')
+            title_row.pack(side=tk.TOP, fill=tk.X)
 
             clerkbot_label = tk.Label(
-                title_row, text="Ask ClerkBot!", font=("Arial", 16, "bold")
+                title_row, text="ClerkBot", font=("Arial", 16, "bold")
             )
             clerkbot_label.pack(side=tk.LEFT)
 
@@ -537,7 +546,7 @@ class App:
                 bg="blue" if self.use_online_llm.get() else "green",
                 fg="white"
             )
-            self.llm_toggle_btn.pack(side=tk.LEFT, padx=(10, 0))
+            self.llm_toggle_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
             # Update button text automatically whenever self.use_online_llm changes
             def update_llm_btn_text(*args):
@@ -850,7 +859,6 @@ class App:
             self.sorting_folders.remove(current_dir)
             if len(self.sorting_folders) == 0: # no folders are currently in sorting progress
                 self.cancel_all_btn.config(state=tk.DISABLED)
-
 
     def semantic_file_sort(self):
         current_dir = self.path_entry.get()

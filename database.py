@@ -53,6 +53,8 @@ class ChatDB():
         self.chroma_client = chromadb.PersistentClient(path="clerk_vectordb")
         print("DB: Init complete.")
 
+    ### SQLITE RELATIONAL DB METHODS ###
+
     def create_chatsession(self, name: str) -> str:
         chatSession_id = uuid.uuid4().hex
         created_date = datetime.now()
@@ -166,6 +168,8 @@ class ChatDB():
         )
         print(f"DB: Deleted chat session with id {chatSession_id}")
         self.con.commit()
+
+    ### VECTOR DB METHODS ###
 
     def add_file_chunk_embedding(self, file_id: int, file_name: str, page_num: int, embedding: np.ndarray, chunk: str = None):
         chunk_id = uuid.uuid4().hex

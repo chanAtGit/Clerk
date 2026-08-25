@@ -11,7 +11,7 @@ from pdf2image import convert_from_path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader
 
-from model_commons import load_embedding_model, embedding_encode, EMBEDDING_MODEL_NAME
+from model_commons import load_embedding_model, unload_embedding_model, embedding_encode, EMBEDDING_MODEL_NAME
 from database import chat_db
 
 poppler_path = None
@@ -296,7 +296,8 @@ def get_directory_mean_embeddings(subdirectories: list) -> dict:
     if len(mean_embeddings) == 0:
         print("No embeddings were generated. Exiting.")
         return None
-    
+
+    unload_embedding_model() # unload the embedding model after processing all subdirectories
     return mean_embeddings
 
 # --- Helper 1: Extract File Content Snippets ---
