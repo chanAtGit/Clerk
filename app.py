@@ -731,10 +731,22 @@ class App:
         btn_frame = tk.Frame(popup)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
 
-        confirm_btn = tk.Button(btn_frame, text="Confirm", width=12, command=confirm_sorting, cursor="hand2")
+        confirm_btn = tk.Button(btn_frame, 
+                                text="Confirm", 
+                                width=12, 
+                                command=confirm_sorting,
+                                bg="green",
+                                fg="white",
+                                cursor="hand2")
         confirm_btn.pack(side=tk.LEFT, padx=40)
 
-        reject_btn = tk.Button(btn_frame, text="Reject", width=12, command=reject_sorting, cursor="hand2")
+        reject_btn = tk.Button(btn_frame, 
+                               text="Reject", 
+                               width=12, 
+                               command=reject_sorting,
+                               bg="red",
+                               fg="white", 
+                               cursor="hand2")
         reject_btn.pack(side=tk.RIGHT, padx=40)
 
         sorting_info = scrolledtext.ScrolledText(popup, height=20, width=65, font=("Arial", 10), wrap=tk.WORD)
