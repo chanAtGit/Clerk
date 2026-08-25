@@ -2,6 +2,7 @@ import sqlite3
 import uuid
 import chromadb
 import numpy as np
+import os
 
 from datetime import datetime
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ class Inquiry:
     prompt: str
     response: str | None
     chatSession_id: str
+    dir_path: str
 
 class ChatDB():
     def __init__(self):
@@ -39,6 +41,8 @@ class ChatDB():
                 prompt TEXT NOT NULL,
                 response TEXT,
                 chatSession_id TEXT,
+                dir_id TEXT,
+                dir_name TEXT,
                 created_date DATETIME,
                 FOREIGN KEY (chatSession_id) REFERENCES chatSessions(chatSession_id) ON DELETE CASCADE
             )
@@ -65,13 +69,15 @@ class ChatDB():
 
     def create_inquiry(self, inquiry: Inquiry) -> str:
         inquiry_id = uuid.uuid4().hex
+        dir_id = os.stat(inquiry.dir_path).st_ino  # Get the inode number of the directory as a unique identifier
+        dir_name = os.path.basename(inquiry.dir_path)
         created_date = datetime.now()
         self.cur.execute(
             '''
-            INSERT INTO inquiries (inquiry_id, prompt, response, chatSession_id, created_date)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO inquiries (inquiry_id, prompt, response, chatSession_id, dir_id, dir_name, created_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ''',
-            (inquiry_id, inquiry.prompt, inquiry.response, inquiry.chatSession_id, created_date)
+            (inquiry_id, inquiry.prompt, inquiry.response, inquiry.chatSession_id, dir_id, dir_name, created_date)
         )
         self.con.commit()
         print(f"DB: Created inquiry: {inquiry_id}")
@@ -90,7 +96,7 @@ class ChatDB():
     def get_inquiries_from_session(self, chatSession_id: str) -> list:
         self.cur.execute(
             '''
-            SELECT prompt, response FROM inquiries
+            SELECT prompt, response, dir_name FROM inquiries
             WHERE chatSession_id = ?
             ORDER BY created_date ASC
             ''',
@@ -98,6 +104,33 @@ class ChatDB():
         )
         print(f"DB: Got inquiries from session: {chatSession_id}")
         return self.cur.fetchall()
+
+    def get_latest_inq_dir_from_session(self, chatSession_id: str) -> str:
+        self.cur.execute(
+            '''
+            SELECT dir_name FROM inquiries
+            WHERE chatSession_id = ?
+            ORDER BY created_date DESC
+            ''',
+            (chatSession_id,)
+        )
+        print(f"DB: Got latest inquiry from session: {chatSession_id}")
+        result = self.cur.fetchone()
+        return result[0] if result else None
+
+    def get_inquiries_for_llm_history(self, chatSession_id:str, dir_path: str) -> list:
+        '''Get the two most recent inquiries from a specific chat session and directory for LLM history'''
+        dir_id = os.stat(dir_path).st_ino  # Get the inode number of the directory as a unique identifier
+        self.cur.execute(
+                    '''
+                    SELECT prompt, response, dir_name FROM inquiries
+                    WHERE chatSession_id = ? AND dir_id = ?
+                    ORDER BY created_date ASC
+                    ''',
+                    (chatSession_id, dir_id)
+                )
+        print(f"DB: Got inquiries for llm history from session: {chatSession_id}")
+        return self.cur.fetchmany(2)        
 
     def update_chatsession_name_by_id(self, chatSession_id: str, new_name: str):
         self.cur.execute(

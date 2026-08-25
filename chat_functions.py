@@ -42,11 +42,10 @@ def get_new_chat_title(first_question: str, new_title: list, creating_new_chat: 
     finally:
         if not online: unload_llm()
 
-def get_chat_response(prompt: str, retrieved_context: list, dir_path: str, online: bool = False) -> str:
+def get_chat_response(prompt: str, retrieved_context: list, history: list, dir_path: str, online: bool = False) -> str:
     '''Get chatbot message when using ClerkBot module'''
     try:
         # TODO: Add more advanced features. This is just a placeholder function with no chat memory.
-
         content_list = []
         text_context = []
         img_context = []
@@ -112,6 +111,11 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str, onlin
             {"role": "system", "content": system_prompt}
         ]
 
+        if len(history) > 0:
+            for user_message, bot_message, _ in history:
+                messages.append({"role": "user", "content": user_message})
+                messages.append({"role": "assistant", "content": bot_message})
+
         if not online:
             messages.append({
                 "role": "user", 
@@ -122,9 +126,10 @@ def get_chat_response(prompt: str, retrieved_context: list, dir_path: str, onlin
         else:
             messages.append({
                 "role": "user", 
-                "content": augmented_prompt,
+                "content": augmented_prompt if retrieved_context else prompt,
                 "images": img_context # Pass the path string or bytes directly
             })
+
             output = ollama.chat(
                 model="gemma4:cloud",  # Or use "gemma4:31b-cloud" for the dense model
                 messages=messages

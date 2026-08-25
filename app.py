@@ -235,7 +235,7 @@ class App:
         # ChatWidget(self.recent_chat_list.scrollable_frame, "test", '123')
         self._reload_chat_list(self.recent_chat_list.scrollable_frame)
 
-    def chat_thread_worker(self, user_message: str, chat_id: str):
+    def chat_thread_worker(self, user_message: str, chat_id: str, tar_dir: str):
         try:
             temp_db = ChatDB()
             creating_new_chat: bool = (chat_id == None)
@@ -244,6 +244,15 @@ class App:
 
             # Display user's message in the chat window
             if self.current_chat_id == chat_id:
+                latest_dir: str = temp_db.get_latest_inq_dir_from_session(chat_id) 
+                # just to print the latest inquiry directory from session
+                if latest_dir is None or latest_dir != os.path.basename(tar_dir):
+                    # Print tracking message if user switched directory during conversation or this is first conversation
+                    tk.Label(self.chat_content.scrollable_frame, 
+                        text=f"== Tracking: { os.path.basename(tar_dir)} ==", 
+                        font=("Arial", 10), 
+                        fg="green").pack(anchor='center',pady=5)
+
                 TextBubble(
                     parent=self.chat_content.scrollable_frame,
                     text=user_message,
@@ -253,7 +262,7 @@ class App:
                 # Display loading message
                 tk.Label(self.chat_content.scrollable_frame, 
                         text="Waiting for Clerkbot response...", 
-                        font=("Arial", 10)).pack(anchor='w',pady=5)
+                        font=("Arial", 10)).pack(anchor='w',pady=5, padx=2)
 
                 self.chat_content.scroll_to_bottom()
 
@@ -274,8 +283,11 @@ class App:
                 self.chat_input.config(state=tk.DISABLED)
                 self.input_btn.config(state=tk.DISABLED)
 
+            # Get the last two recent inquiries
+            history = temp_db.get_inquiries_for_llm_history(chat_id, tar_dir)
+
             # Create new inquiry record (with no response)
-            new_inquiry = Inquiry(user_message, bot_response, chat_id)
+            new_inquiry = Inquiry(user_message, bot_response, chat_id, tar_dir)
             new_inquiry_id = temp_db.create_inquiry(new_inquiry)
 
             # Update file embeddings in the target directory (for RAG)
@@ -297,11 +309,13 @@ class App:
                       self.use_online_llm.get())
             )
             create_title_thread.start()
+
             # Get a response from ClerkBot
             bot_response = get_chat_response(
                 user_message, 
-                retrieved_context, 
-                self.selected_path, 
+                retrieved_context,
+                history=history, 
+                dir_path=self.selected_path, 
                 online=self.use_online_llm.get()
                 )
 
@@ -347,6 +361,7 @@ class App:
                 self.input_btn.config(state=tk.NORMAL)
                 self.chat_inprogress_list.remove(chat_id)
             temp_db.close()
+            del temp_db
         
     def _build_chat_window(self, parent_container):
         """Build the chat window area"""
@@ -361,7 +376,7 @@ class App:
             user_message = self.chat_input.get("1.0", tk.END).strip()
             if not (user_message and self.selected_path):
                 return
-            self.executor.submit(self.chat_thread_worker, user_message, self.current_chat_id)
+            self.executor.submit(self.chat_thread_worker, user_message, self.current_chat_id, self.selected_path)
 
         self.input_btn = tk.Button(
             user_input_frame, 
@@ -424,7 +439,17 @@ class App:
             text="Ask me anything about what's in the folder!",
             from_user = False
         )
-        for user_message, bot_message in prev_convs:
+
+        prev_dir_name: str = None
+        for user_message, bot_message, dir_name in prev_convs:
+            # Add Tracking message if user switched directory during conversation
+            if prev_dir_name != dir_name:
+                tk.Label(self.chat_content.scrollable_frame, 
+                    text=f"== Tracking: {dir_name} ==", 
+                    font=("Arial", 10), 
+                    fg="green").pack(anchor='center',pady=5)
+                prev_dir_name = dir_name
+            
             TextBubble(
                 parent=self.chat_content.scrollable_frame,
                 text=user_message,
@@ -439,7 +464,7 @@ class App:
             else:
                 tk.Label(self.chat_content.scrollable_frame, 
                                         text="Waiting for Clerkbot response...", 
-                                        font=("Arial", 10)).pack(anchor='w',pady=5)
+                                        font=("Arial", 10)).pack(anchor='w',pady=5, padx=2)
         self.chat_content.scroll_to_bottom()
 
         if chatsession_id in self.chat_inprogress_list:
@@ -509,7 +534,8 @@ class App:
                 width=7,
                 font=("Arial", 11),
                 cursor="hand2",
-                bg="blue" if self.use_online_llm.get() else "green"
+                bg="blue" if self.use_online_llm.get() else "green",
+                fg="white"
             )
             self.llm_toggle_btn.pack(side=tk.LEFT, padx=(10, 0))
 
@@ -517,7 +543,7 @@ class App:
             def update_llm_btn_text(*args):
                 self.llm_toggle_btn.config(
                     text= "ᯤOnline" if self.use_online_llm.get() else "💻Local",
-                    background="blue" if self.use_online_llm.get() else "green"
+                    background="blue" if self.use_online_llm.get() else "green",
                 )
 
             self.use_online_llm.trace_add("write", update_llm_btn_text)
@@ -611,7 +637,7 @@ class App:
     def _goto_folder(self, dir_path: str):
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
-        self.tracking_dir_label.config(text=f"Folder: {re.split(r'[/\\]', dir_path)[-1]}")
+        self.tracking_dir_label.config(text=f"Folder: {os.path.basename(dir_path)}")
         self._display_files_in_dir(dir_path)
 
     def browse_folder(self):
