@@ -1,40 +1,38 @@
 import os
 import platform
 import subprocess
-import time
 import sys
 import tkinter as tk
-import threading
-from tkinter import scrolledtext, filedialog, ttk
-from PIL import Image, ImageTk
+from tkinter import filedialog, ttk
 from concurrent.futures import ThreadPoolExecutor
-from huggingface_hub import login, logout
+from PIL import Image, ImageTk
+from huggingface_hub import login
 
-from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups, LLM_NAME
-from file_embeddings import embeddings_init, get_file_id, get_file_mean_embeddings
-from model_commons import unload_embedding_model
-from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
-from chat_functions import get_chat_response, get_new_chat_title
-from database import chat_db, ChatDB, Inquiry
+from file_embeddings import embeddings_init
+from database import chat_db, ChatDB
+from file_sorting_page import FileSortingPage
+from clerkbot_page import ClerkBotPage
+from settings_page import SettingsPage
+
 
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller"""
     base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
     return os.path.join(base_path, relative_path)
 
-class App:
 
+class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Clerk")
         self.root.geometry("950x650")
 
-        # Initalize models and embeddings
+        # Initialize models and embeddings
         embeddings_init()
 
         # State Variables
         self.selected_path: str = None
-        self.is_cancelled_all: bool = False # Flag to determine if all sorting jobs are to be cancelled
+        self.is_cancelled_all: bool = False
         self.current_chat_id: str = None
 
         # Thread Executor and Helpers
@@ -43,13 +41,9 @@ class App:
 
         # Database
         self.database: ChatDB = chat_db 
-        # They share the same memory address, so we can use the same instance of ChatDB across the app
         self.chat_session_list: list = self.database.get_all_chatsessions() 
-        # chat session list contains tuples in the form of (chat_id, chat_name)
         self.chat_inprogress_list: list = []
-        # list of chat session id with its corresponding chat awaiting bot response 
 
-        ### Initialize Hugging Face login and paths. Models are loaded dynamically later. ###
         os.makedirs("data", exist_ok=True)
         os.makedirs("models", exist_ok=True)
         self.huggingface_token: str = self.database.get_huggingface_token()
@@ -58,7 +52,7 @@ class App:
         except Exception as e:
             print(f"Error encountered when logging into huggingface: {e}. Using offline mode.")
 
-        # Settings / Options (Using Tkinter BooleanVars for clean binding)
+        # Settings / Options
         self.use_online_llm = tk.BooleanVar(value=False)
         self.singular_sorting = tk.BooleanVar(value=False)
         self.generate_folder = tk.BooleanVar(value=True)
@@ -70,7 +64,7 @@ class App:
         self.root.columnconfigure(0, weight=1)
         self.root.columnconfigure(1, weight=0)
 
-        # Asset References (stored on self to prevent garbage collection)
+        # Asset References
         self.prev_icon = ImageTk.PhotoImage(
             Image.open(resource_path("assets/prev_icon.png")).resize((15, 15))
         )
@@ -93,7 +87,6 @@ class App:
         label.grid(row=0, column=0, columnspan=2, pady=5)
 
     def _build_directory_frame(self):
-        # COMPONENT 1: LEFT FRAME (DIRECTORY BROWSER)
         directory_frame = ttk.Frame(self.root, relief="ridge", padding=10)
         directory_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         directory_frame.rowconfigure(1, weight=1)
@@ -134,508 +127,7 @@ class App:
 
         scrollbar.config(command=self.file_listbox.yview)
 
-    def _build_sorting_page(self, parent_container):
-        '''Build the sorting page'''
-        self.page1 = ttk.Frame(parent_container, relief="groove", padding=10)
-        self.page1.grid(row=0, column=0, sticky="nsew")
-        self.page1.grid_propagate(False)
-        self.page1.rowconfigure(0, weight=0)
-        self.page1.rowconfigure(1, weight=0)
-        self.page1.rowconfigure(2, weight=1)
-        self.page1.columnconfigure(0, weight=1)
-
-        # OPTIONS PANEL
-        options_panel = ttk.Frame(self.page1)
-        options_panel.grid(row=0, column=0, sticky="ew", pady=5)
-
-        tk.Label(options_panel, text="File Sort", font=("Helvetica", 15, "bold")).pack(anchor="center")
-
-        mode_label = tk.Label(options_panel, text="Choose sorting mode:", font=("Arial", 10, "bold"))
-        mode_label.pack(anchor="w")
-        rb1 = tk.Radiobutton(
-                options_panel,
-                text="Generate and sort into new folders",
-                variable=self.generate_folder,
-                value=True
-            )
-        
-        rb2 = tk.Radiobutton(
-                options_panel,
-                text="Sort into existing folders",
-                variable=self.generate_folder,
-                value=False
-            )
-        rb1.pack(anchor="w", padx=20)
-        rb2.pack(anchor="w", padx=20)
-
-        online_toggle_btn = tk.Checkbutton(
-            options_panel,
-            text="Use Gemma4:cloud (Ollama)",
-            variable=self.use_online_llm,
-        )
-        online_toggle_btn.pack(side="top", anchor="w")
-
-        recursive_toggle_btn = tk.Checkbutton(
-            options_panel,
-            text="Create no subdirectories",
-            variable=self.singular_sorting,
-        )
-        recursive_toggle_btn.pack(side="top", anchor="w")
-
-        # BUTTONS PANEL
-        btn_panel = ttk.Frame(self.page1)
-        btn_panel.grid(row=1, column=0, sticky="ew", pady=5)
-
-        self.sort_btn = tk.Button(
-            btn_panel,
-            text="Sort",
-            command=self.semantic_file_sort,
-            width=8,
-            font=("Arial", 11),
-            cursor="hand2"
-        )
-        self.sort_btn.pack(side=tk.LEFT)
-
-        self.cancel_all_btn = tk.Button(
-            btn_panel,
-            text="Cancel All",
-            command=self.cancel_file_sort,
-            width=8,
-            font=("Arial", 11),
-            state=tk.DISABLED,
-            cursor="hand2"
-        )
-        self.cancel_all_btn.pack(side=tk.RIGHT)
-
-        sorting_jobs_frame = ttk.Frame(self.page1, relief='solid')
-        sorting_jobs_frame.grid(row=2, column=0, sticky="nsew", pady=5)
-        
-        sorting_jobs_label = tk.Label(sorting_jobs_frame, text="Current sorting jobs", font=("Helvetica", 11, "underline"))
-        sorting_jobs_label.pack(anchor="center", pady=5)
-
-        # Instantiating the standalone scrollable container to store current sorting jobs
-        self.sorting_jobs_list = ScrollableFrame(sorting_jobs_frame)
-        # Sticky "nsew" fills both vertical and horizontal space
-        self.sorting_jobs_list.pack(fill=tk.BOTH, expand=True, padx=2)
-
-    def _reload_chat_list(self, parent_container):
-        """reload the recent chat list in the sidebar"""
-        # Clear all ChatWidgets (if any)
-        for widget in parent_container.winfo_children():
-            widget.destroy()
-
-        # add the chat widgets
-        for chat_id, chat_name in self.chat_session_list:
-            ChatWidget(parent_container, chat_name, chat_id, 
-                       go_to_func=self._load_chatsession_chats,
-                       delete_func=self._delete_chatsession)
-        print("Reloaded chat_list.")
-        
-    def _build_sidebar(self, parent_container):
-        self.sidebar_frame = ttk.Frame(
-            parent_container, width=250, relief="solid", padding=10
-        )
-        
-        tk.Button(self.sidebar_frame, 
-                  text="💬 New Chat", 
-                  font=("Arial", 12, "bold"), 
-                  command=self._open_new_chat,
-                  cursor="hand2").pack(fill=tk.X, pady=2)
-
-        sidebar_title = ttk.Label(
-            self.sidebar_frame, text="Recent Chats", font=("Arial", 10, "bold")
-        )
-        sidebar_title.pack(anchor="w", pady=(20,0))
-
-        self.recent_chat_list = ScrollableFrame(self.sidebar_frame)
-        self.recent_chat_list.pack(fill=tk.BOTH, expand=True)
-
-        # ChatWidget(self.recent_chat_list.scrollable_frame, "test", '123')
-        self._reload_chat_list(self.recent_chat_list.scrollable_frame)
-
-    def chat_thread_worker(self, user_message: str, chat_id: str, tar_dir: str):
-        try:
-            temp_db = ChatDB()
-            creating_new_chat: bool = (chat_id == None)
-            # Clear the input field
-            self.root.after(0, self.chat_input.delete("1.0", tk.END))
-
-            # Display user's message in the chat window
-            if self.current_chat_id == chat_id:
-                latest_dir: str = temp_db.get_latest_inq_dir_from_session(chat_id) 
-                # just to print the latest inquiry directory from session
-                if latest_dir is None or latest_dir != os.path.basename(tar_dir):
-                    # Print tracking message if user switched directory during conversation or this is first conversation
-                    tk.Label(self.chat_content.scrollable_frame, 
-                        text=f"== Tracking: { os.path.basename(tar_dir)} ==", 
-                        font=("Arial", 10), 
-                        fg="green").pack(anchor='center',pady=5)
-
-                TextBubble(
-                    parent=self.chat_content.scrollable_frame,
-                    text=user_message,
-                    from_user=True
-                )
-
-                # Display loading message
-                tk.Label(self.chat_content.scrollable_frame, 
-                        text="Waiting for ClerkBot response...", 
-                        font=("Arial", 10),
-                        fg="orange").pack(anchor='w',pady=5, padx=5)
-
-                self.chat_content.scroll_to_bottom()
-
-            bot_response: str = None
-
-            # Create new chat session record in database if chat_id is none (meaning this is a new chat)
-            if creating_new_chat:
-                chat_id = temp_db.create_chatsession("Pending chat title...")
-                new_chat_session = (chat_id, "Pending chat title...")
-                self.chat_session_list.insert(0, new_chat_session) # insert at the beginning of the list
-                self._reload_chat_list(self.recent_chat_list.scrollable_frame)
-
-                if self.current_chat_id == None: # The user is staying on the newly created chat
-                    self.current_chat_id = chat_id
-
-            self.chat_inprogress_list.append(chat_id)
-            if self.current_chat_id in self.chat_inprogress_list:
-                self.chat_input.config(state=tk.DISABLED)
-                self.input_btn.config(state=tk.DISABLED)
-
-            # Get the last two recent inquiries
-            history = temp_db.get_inquiries_for_llm_history(chat_id, tar_dir)
-
-            # Create new inquiry record (with no response)
-            new_inquiry = Inquiry(user_message, bot_response, chat_id, tar_dir)
-            new_inquiry_id = temp_db.create_inquiry(new_inquiry)
-
-            # Update file embeddings in the target directory (for RAG)
-            get_file_mean_embeddings(self.selected_path)
-
-            # Retrieve file chunks from ChromaDB based on the user's message and the tracked files
-            file_id_list = [get_file_id(os.path.join(self.selected_path, f)) 
-                            for f in os.listdir(self.selected_path) 
-                            if os.path.isfile(os.path.join(self.selected_path, f))]
-            retrieved_context = temp_db.retrieve_file_chunk(user_message, file_id_list)
-
-            unload_embedding_model() # Safely unload embedding model
-
-            new_title = []
-            create_title_thread = threading.Thread(
-                target=get_new_chat_title, 
-                args=(user_message, new_title, 
-                      creating_new_chat, 
-                      self.use_online_llm.get())
-            )
-            create_title_thread.start()
-
-            # Get a response from ClerkBot
-            bot_response = get_chat_response(
-                user_message, 
-                retrieved_context,
-                history=history, 
-                dir_path=self.selected_path, 
-                online=self.use_online_llm.get()
-                )
-
-            create_title_thread.join() # wait for create title thread to finish before continuing
-
-            for i, (chat_id_iter, _) in enumerate(self.chat_session_list):
-                if chat_id_iter == chat_id:
-                    if creating_new_chat:
-                        # Update chat session's name if user input in a newly created chat
-                        temp_db.update_chatsession_name_by_id(chat_id, new_title[0])
-                        self.chat_session_list[i] = (chat_id, new_title[0])
-                    # Move the chat which has received the response to the top
-                    self.chat_session_list.insert(0, self.chat_session_list.pop(i))
-                    break
-
-            self._reload_chat_list(self.recent_chat_list.scrollable_frame)
-
-            # Handle LLM response
-            if bot_response:
-                temp_db.update_inquiry_response_by_id(new_inquiry_id, bot_response)
-
-                if self.current_chat_id == chat_id:
-                    # Remove loading message
-                    self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
-                    # Append and display LLM Response in chat window
-                    TextBubble(
-                        parent=self.chat_content.scrollable_frame,
-                        text=bot_response,
-                        from_user=False
-                    )
-                    self.chat_content.scroll_to_bottom()
-
-        except Exception as e:
-            print(f"An error occurred while chatting: {e}")
-
-        finally:
-            # lift restriction on chat_input and input_btn
-            if self.current_chat_id in self.chat_inprogress_list:
-                self.chat_input.config(state=tk.NORMAL)
-                self.input_btn.config(state=tk.NORMAL)
-            self.chat_inprogress_list.remove(chat_id)
-            temp_db.close()
-            del temp_db
-        
-    def _build_chat_window(self, parent_container):
-        """Build the chat window area"""
-        self.chat_frame = ttk.Frame(parent_container)
-        self.chat_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 1. Pack bottom input frame FIRST so it anchors to the bottom space
-        user_input_frame = ttk.Frame(self.chat_frame)
-        user_input_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
-
-        def send_message():
-            user_message = self.chat_input.get("1.0", tk.END).strip()
-            if not (user_message and self.selected_path):
-                return
-            self.executor.submit(self.chat_thread_worker, user_message, self.current_chat_id, self.selected_path)
-
-        self.input_btn = tk.Button(
-            user_input_frame, 
-            text="⌯⌲", 
-            command=send_message,
-            bg="gray",
-            fg="white",
-            font=("Arial", 15),
-            cursor="hand2"
-            )
-        self.input_btn.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.chat_input = tk.Text(
-                    user_input_frame, 
-                    height=3, 
-                    padx=10,
-                    pady=10,
-                    wrap=tk.WORD,
-                    font=("Arial", 10)
-                    )
-        self.chat_input.pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10)
-        )
-
-        self.chat_content = ScrollableFrame(self.chat_frame)
-        self.chat_content.pack(fill=tk.BOTH, expand=True)
-
-        # Starting message
-        TextBubble(
-            parent=self.chat_content.scrollable_frame,
-            text="Ask me anything about what's in the folder!",
-            from_user = False
-        )
-
-    def _open_new_chat(self):
-        # set state variables
-        self.current_chat_id = None
-        # clear chat window
-        self.chat_content.clear_content()
-        # Add starting message
-        TextBubble(
-            parent=self.chat_content.scrollable_frame,
-            text="Ask me anything about what's in the folder!",
-            from_user = False
-        )
-        # config chat_input and input_btn
-        self.chat_input.config(state=tk.NORMAL)
-        self.input_btn.config(state=tk.NORMAL)
-
-    def _load_chatsession_chats(self, chatsession_id: str):
-        '''Load all previous conversations from chatsession to chat window'''
-        if self.current_chat_id == chatsession_id:
-            return
-        
-        self.current_chat_id = chatsession_id # user is currently viewing this chat
-        # clear chat window
-        self.chat_content.clear_content()
-
-        prev_convs = self.database.get_inquiries_from_session(chatsession_id)
-        # Add starting message
-        TextBubble(
-            parent=self.chat_content.scrollable_frame,
-            text="Ask me anything about what's in the folder!",
-            from_user = False
-        )
-
-        prev_dir_name: str = None
-        for id, user_message, bot_message, dir_name in prev_convs:
-            # Add Tracking message if user switched directory during conversation
-            if bot_message is None and chatsession_id not in self.chat_inprogress_list:
-                # save storage space by deleting inquiries with no replies
-                self.database.delete_inquiry_by_id(id)
-                continue
-
-            if prev_dir_name != dir_name:
-                tk.Label(self.chat_content.scrollable_frame, 
-                    text=f"== Tracking: {dir_name} ==", 
-                    font=("Arial", 10), 
-                    fg="green").pack(anchor='center',pady=5)
-                prev_dir_name = dir_name
-            
-            TextBubble(
-                parent=self.chat_content.scrollable_frame,
-                text=user_message,
-                from_user = True
-            )
-            if bot_message:
-                TextBubble(
-                    parent=self.chat_content.scrollable_frame,
-                    text=bot_message,
-                    from_user = False
-                )  
-            else:
-                tk.Label(
-                    self.chat_content.scrollable_frame, 
-                    text="Waiting for ClerkBot response...", 
-                    font=("Arial", 10),
-                    fg="orange").pack(anchor='w',pady=5, padx=5)
-
-        self.chat_content.scroll_to_bottom()
-
-        if chatsession_id in self.chat_inprogress_list:
-            self.chat_input.config(state=tk.DISABLED)
-            self.input_btn.config(state=tk.DISABLED)
-        else:
-            self.chat_input.config(state=tk.NORMAL)
-            self.input_btn.config(state=tk.NORMAL)
-
-    def _delete_chatsession(self, chatsession_id:str):
-        if self.current_chat_id == chatsession_id:
-            # user is currently accessing the chat session that is about to be deleted
-            self._open_new_chat()
-        self.database.delete_chatsession_by_id(chatsession_id)
-
-        # Delete the chat session (id, name) from self.chat_session_list
-        for i, (chat_id, _) in enumerate(self.chat_session_list):
-            if chat_id == chatsession_id:
-                del self.chat_session_list[i]
-                break
-
-        # reload recent chat list in sidebar
-        self._reload_chat_list(self.recent_chat_list.scrollable_frame)
-
-
-    def _build_clerkbot_page(self, parent_container):
-            """Build ClerkBot (Chatbot) page"""
-            self.page2 = ttk.Frame(parent_container, relief="groove", padding=10)
-            self.page2.grid(row=0, column=0, sticky="nsew")
-
-            self.sidebar_visible = False
-
-            # --- Top Header Bar ---
-            top_bar = ttk.Frame(self.page2)
-            top_bar.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-
-            # Menu Toggle Button
-            self.sidebar_btn = ttk.Button(
-                top_bar, text="☰", width=8, command=self._toggle_sidebar, cursor="hand2"
-            )
-            self.sidebar_btn.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-
-            # Header Info Container
-            header_info_frame = ttk.Frame(top_bar)
-            header_info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-            # Title Row containing "ClerkBot" and the toggle button
-            title_row = ttk.Frame(header_info_frame)
-            title_row.pack(side=tk.TOP, fill=tk.X)
-
-            clerkbot_label = tk.Label(
-                title_row, text="ClerkBot", font=("Arial", 16, "bold")
-            )
-            clerkbot_label.pack(side=tk.LEFT)
-
-            # LLM Toggle Button (placed to the right of clerkbot_label)
-            def toggle_llm():
-                self.use_online_llm.set(not self.use_online_llm.get())
-
-            self.llm_toggle_btn = tk.Button(
-                title_row,
-                text= "ᯤOnline" if self.use_online_llm.get() else "💻Local",
-                borderwidth=0,          # Removes the standard button border
-                relief="flat",          # Ensures the button style is flat
-                highlightthickness=0,   # No extra highlight border from appearing when the button is clicked 
-                command=toggle_llm,
-                width=7,
-                font=("Arial", 11),
-                cursor="hand2",
-                bg="blue" if self.use_online_llm.get() else "green",
-                fg="white"
-            )
-            self.llm_toggle_btn.pack(side=tk.RIGHT, padx=(0, 10))
-
-            # Update button text automatically whenever self.use_online_llm changes
-            def update_llm_btn_text(*args):
-                self.llm_toggle_btn.config(
-                    text= "ᯤOnline" if self.use_online_llm.get() else "💻Local",
-                    background="blue" if self.use_online_llm.get() else "green",
-                )
-
-            self.use_online_llm.trace_add("write", update_llm_btn_text)
-
-            self.tracking_dir_label = tk.Label(
-                header_info_frame, text="Folder: None", font=("Arial", 9)
-            )
-            self.tracking_dir_label.pack(anchor='w')
-
-            # --- Body Area Container ---
-            body_container = ttk.Frame(self.page2)
-            body_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-            # --- Main Content Area - Chat Zone ---
-            self._build_chat_window(body_container)
-
-            # --- Overlay Sidebar Frame ---
-            self._build_sidebar(body_container)
-
-    def _toggle_sidebar(self):
-        """Show or hide the sidebar overlay using place()"""
-        if self.sidebar_visible:
-            self.sidebar_frame.place_forget()
-            self.sidebar_visible = False
-        else:
-            self.sidebar_frame.place(x=-10, y=0, relheight=1.0, width=250)
-            self.sidebar_frame.lift()
-            self.sidebar_visible = True
-
-    def _build_settings_page(self, parent_container):
-        self.page3 = ttk.Frame(parent_container, relief="groove", padding=10)
-        self.page3.grid(row=0, column=0, sticky="nsew")
-
-        settings_label = tk.Label(
-            self.page3, text="Settings", font=("Arial", 16, "bold")
-        )
-        settings_label.pack(anchor="center", pady=(0, 10))
-
-        # --- Settings Options --- #
-        tk.Label(
-            self.page3, text="Hugging Face Token", font=("Arial", 11)
-        ).pack(anchor="w", pady=(0, 5))
-        token_entry = tk.Entry(self.page3, show="*", font=("Arial", 12))
-        token_entry.pack(anchor="w", fill=tk.X)
-        if self.huggingface_token:
-            token_entry.insert(0, self.huggingface_token)
-
-        def save_settings():
-            logout()
-            try:
-                login(token=token_entry.get())
-                self.database.update_huggingface_token(token_entry.get())
-            except Exception as e:
-                print(f"Error encountered while saving settings: {e}")
-
-        settings_save_btn = tk.Button(
-            self.page3, 
-            text="Save", 
-            font=("Arial", 11), 
-            command=save_settings,
-            cursor="hand2")
-        settings_save_btn.pack(anchor="center", pady=10)
-            
     def _build_right_frame(self):
-        # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, FILE SORT AND CLERKBOT)
         right_container = ttk.Frame(self.root, width=350)
         right_container.grid_propagate(False)
 
@@ -643,7 +135,6 @@ class App:
         right_container.rowconfigure(1, weight=1)
         right_container.columnconfigure(0, weight=1)
 
-        # --- Top Navigation Frame ---
         nav_frame = ttk.Frame(right_container)
         nav_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
 
@@ -662,25 +153,24 @@ class App:
         )
         btn_page3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=0)
 
-        # --- Pages Container ---
         pages_container = ttk.Frame(right_container)
         pages_container.grid(row=1, column=0, sticky="nsew")
         pages_container.rowconfigure(0, weight=1)
         pages_container.columnconfigure(0, weight=1)
 
-        # --- Page 1: File Sort ---
-        self._build_sorting_page(pages_container)
+        # Page instantiation
+        self.page1 = FileSortingPage(pages_container, self)
+        self.page1.grid(row=0, column=0, sticky="nsew")
 
-        # --- Page 2: ClerkBot Page ---
-        self._build_clerkbot_page(pages_container)
+        self.page2 = ClerkBotPage(pages_container, self)
+        self.page2.grid(row=0, column=0, sticky="nsew")
 
-        # --- Page 3: Settings Page ---
-        self._build_settings_page(pages_container)
+        self.page3 = SettingsPage(pages_container, self)
+        self.page3.grid(row=0, column=0, sticky="nsew")
 
         self.page1.tkraise()
 
-    # --- Directory and File Helper Methods ---
-    def _display_files_in_dir(self, selected_dir: str):
+    def display_files_in_dir(self, selected_dir: str):
         try:
             files = [
                 f
@@ -706,8 +196,9 @@ class App:
     def _goto_folder(self, dir_path: str):
         self.path_entry.delete(0, tk.END)
         self.path_entry.insert(0, dir_path)
-        self.tracking_dir_label.config(text=f"Folder: {os.path.basename(dir_path)}")
-        self._display_files_in_dir(dir_path)
+        if hasattr(self, 'page2'):
+            self.page2.update_tracking_dir(dir_path)
+        self.display_files_in_dir(dir_path)
 
     def browse_folder(self):
         selected_dir = filedialog.askdirectory(title="Select a Directory")
@@ -719,7 +210,8 @@ class App:
         if not self.path_entry.get():
             return
         previous_dir = os.path.dirname(self.path_entry.get())
-        if previous_dir: self._goto_folder(previous_dir)
+        if previous_dir:
+            self._goto_folder(previous_dir)
 
     def next_folder(self):
         if not self.selected_path:
@@ -741,7 +233,7 @@ class App:
     def refresh_folder(self):
         current_dir = self.path_entry.get()
         if current_dir:
-            self._display_files_in_dir(current_dir)
+            self.display_files_in_dir(current_dir)
 
     def on_select_file(self, event):
         selected_indices = self.file_listbox.curselection()
@@ -765,205 +257,11 @@ class App:
             else:
                 subprocess.Popen(["xdg-open", filename])
 
-    def open_confirm_popup(self, directory: str, groups: dict) -> bool:
-        """Display where the files will be sorted and allow user to confirm or reject."""
-        popup = tk.Toplevel(self.root)
-        popup.title(f"Sorting complete for {directory}")
-        popup.geometry("450x450")
-
-        result = False
-
-        def confirm_sorting():
-            nonlocal result
-            result = True
-            popup.destroy()
-
-        def reject_sorting():
-            nonlocal result
-            result = False
-            popup.destroy()
-
-        title = tk.Label(popup, text="Sorting result", font=("Arial", 12, "bold"))
-        title.pack(pady=(15, 2))
-        title = tk.Label(popup, text=f"{directory}", font=("Arial", 8, "bold"))
-        title.pack(pady=(0, 5))
-
-        btn_frame = tk.Frame(popup)
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
-
-        confirm_btn = tk.Button(btn_frame, 
-                                text="Confirm", 
-                                width=12, 
-                                command=confirm_sorting,
-                                bg="green",
-                                fg="white",
-                                cursor="hand2")
-        confirm_btn.pack(side=tk.LEFT, padx=40)
-
-        reject_btn = tk.Button(btn_frame, 
-                               text="Reject", 
-                               width=12, 
-                               command=reject_sorting,
-                               bg="red",
-                               fg="white", 
-                               cursor="hand2")
-        reject_btn.pack(side=tk.RIGHT, padx=40)
-
-        sorting_info = scrolledtext.ScrolledText(popup, height=20, width=65, font=("Arial", 10), wrap=tk.WORD)
-        sorting_info.pack(padx=15, pady=10, fill=tk.BOTH, expand=True)
-
-        def print_line(msg: str):
-            sorting_info.insert(tk.END, f"{msg}\n")
-
-        print_groups(
-            groups,
-            sort_into_existing=not self.generate_folder.get(),
-            print_to_widget=print_line
-        )
-
-        sorting_info.config(state="disabled") 
-
-        popup.grab_set()
-        popup.wait_window(popup)
-
-        return result
-
-    # --- Thread-Safe Updates & Worker Logic ---
-    # def update_status_console(self, text):
-    #     self.root.after(0, lambda: self.sorting_job_widget.set_status(text))
-
-    # def update_progress_bar(self, val):
-    #     self.root.after(0, lambda: self.sorting_job_widget.set_progress(val))
-
-    def check_cancel_all_status(self):
-        return self.is_cancelled_all
-
-    def sorting_thread_worker(self, sorting_widget: SortingJobWidget):
-        start_time = time.perf_counter()
-        try:
-            # Step 0: Basic Thread Setup.
-            current_dir = sorting_widget.target_dir
-            recursive_config: bool = sorting_widget.recursive
-            online_config: bool = sorting_widget.online
-            sort_into_existing_config: bool = sorting_widget.sort_into_existing
-
-            # --- Helper methods to safely update Tkinter from background threads ---
-            def safe_set_status(text):
-                self.root.after(0, lambda: sorting_widget.set_status(text))
-
-            def safe_set_progress(val):
-                self.root.after(0, lambda: sorting_widget.set_progress(val))
-
-            # Step 0.1: Append Sorting Job Widget to Sorting Job List ScollableFrame
-            safe_set_progress(0)
-            safe_set_status("Initializing semantic indexing system...")
-
-            # Step 0.2: Setup cancellation function
-            def check_cancel_status() -> bool:
-                cancel_status: bool = self.is_cancelled_all or sorting_widget.is_cancel
-                if cancel_status:
-                    safe_set_status("Cancelling sorting...")
-                    safe_set_progress(0)
-                return cancel_status
-
-            # Step 1: Semantic Clustering
-            if self.generate_folder.get():
-                groups = SemanticClustering(
-                    current_dir,
-                    recursive=recursive_config,
-                    status_callback=safe_set_status,
-                    progress_callback=safe_set_progress,
-                    check_cancel=check_cancel_status,
-                )
-            else:
-                groups = SortIntoFolders(
-                    current_dir,
-                    status_callback=safe_set_status,
-                    progress_callback=safe_set_progress,
-                    check_cancel=check_cancel_status,
-                )
-
-            # Step 2: Dynamic Auto-Labelling
-            if groups:
-                if self.generate_folder.get():
-                    groups = AutoLabelClusters(
-                        current_dir,
-                        groups,
-                        online=online_config,
-                        status_callback=safe_set_status,
-                        progress_callback=safe_set_progress,
-                        check_cancel=check_cancel_status,
-                    )
-
-                # Step 3: Organise Files
-                confirm: bool = self.open_confirm_popup(current_dir, groups)
-                
-                if confirm:
-                    MoveFiles(
-                        current_dir,
-                        groups,
-                        sort_into_existing=sort_into_existing_config,
-                        status_callback=safe_set_status,
-                        progress_callback=safe_set_progress,
-                        check_cancel=check_cancel_status,
-                    )
-
-                # Calculate sorting time
-                end_time = time.perf_counter()
-                elapsed_time = end_time - start_time
-                minutes, seconds = divmod(elapsed_time, 60)
-                safe_set_status(
-                    f"Sorting completed in {int(minutes)}m {int(seconds)}s"
-                )
-
-        except InterruptedError:
-            safe_set_status("Sorting job cleanly stopped by user.")
-        except Exception as e:
-            safe_set_status(f"Execution Error: {str(e)}")
-        finally:
-            safe_set_progress(0 if self.is_cancelled_all or sorting_widget.is_cancel else 100)
-            if self.path_entry.get() == current_dir: # the user is in browsing the current sorted directory
-                self._display_files_in_dir(current_dir) # Refresh the current directory
-
-            # Delay 5 seconds and destroy the widget
-            time.sleep(5)
-            sorting_widget.destroy()
-            self.sorting_folders.remove(current_dir)
-            if len(self.sorting_folders) == 0: # no folders are currently in sorting progress
-                self.cancel_all_btn.config(state=tk.DISABLED)
-
-    def semantic_file_sort(self):
-        current_dir = self.path_entry.get()
-        if not current_dir or not os.path.exists(current_dir):
-            print("Please select a valid directory first.")
-            return
-
-        if current_dir in self.sorting_folders:
-            return
-
-        self.is_cancelled_all = False
-        self.cancel_all_btn.config(state=tk.NORMAL)
-        self.sorting_folders.append(current_dir)
-        
-        # --- Create and pack the widget on the MAIN thread before starting the worker ---
-        recursive_config: bool = not self.singular_sorting.get()
-        online_config: bool = self.use_online_llm.get()
-        sort_into_existing_config: bool = not self.generate_folder.get()
-        
-        sorting_widget = SortingJobWidget(
-            self.sorting_jobs_list.scrollable_frame,
-            target_dir=current_dir,
-            recursive=recursive_config,
-            online=online_config,
-            sort_into_existing=sort_into_existing_config
-        )
-        sorting_widget.pack(pady=5, fill=tk.X)
-    
-        # Pass the pre-created sorting_widget into the thread worker
-        self.executor.submit(self.sorting_thread_worker, sorting_widget)
-
-    def cancel_file_sort(self):
-        self.is_cancelled_all = True
-
     def run(self):
         self.root.mainloop()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    app.run()
