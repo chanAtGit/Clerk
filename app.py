@@ -44,7 +44,6 @@ class App:
         self.chat_session_list: list = self.database.get_all_chatsessions() 
         self.chat_inprogress_list: list = []
 
-        os.makedirs("data", exist_ok=True)
         os.makedirs("models", exist_ok=True)
         self.huggingface_token: str = self.database.get_huggingface_token()
         try:

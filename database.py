@@ -18,6 +18,7 @@ class Inquiry:
 
 class ChatDB():
     def __init__(self):
+        os.makedirs("data", exist_ok=True)
         self.con = sqlite3.connect("data/chatData.db")
         self.cur = self.con.cursor()
 
