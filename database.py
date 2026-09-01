@@ -48,6 +48,15 @@ class ChatDB():
             )
             '''
         )
+        # Create settings table
+        self.cur.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                huggingface_token TEXT
+            )
+            '''
+        )
         self.con.commit()
 
         self.chroma_client = chromadb.PersistentClient(path="clerk_vectordb")
@@ -55,6 +64,32 @@ class ChatDB():
 
     ### SQLITE RELATIONAL DB METHODS ###
 
+    # SETTINGS RETRIEVAL AND UPDATE
+    def get_huggingface_token(self) -> str:
+        self.cur.execute(
+            '''
+            SELECT huggingface_token FROM settings
+            '''
+        )
+        print(f"DB: Got huggingface_token.")
+        token: str = self.cur.fetchone()
+        return token[0] if token else None
+
+    def update_huggingface_token(self, huggingface_token:str):
+        try:
+            self.cur.execute(
+                '''
+                INSERT OR REPLACE INTO settings (id, huggingface_token) 
+                VALUES (1, ?)
+                ''',
+                (huggingface_token,)
+            )
+            print(f"DB: Updated huggingface_token.")
+            self.con.commit()
+        except Exception as e:
+            print(f"DB: Error updating huggingface_token: {e}")
+
+    # CHAT METHODS
     def create_chatsession(self, name: str) -> str:
         chatSession_id = uuid.uuid4().hex
         created_date = datetime.now()
