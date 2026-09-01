@@ -298,13 +298,13 @@ class TextBubble(ttk.Frame):
 
         # Count visual display lines
         display_lines = self.text_widget.count("1.0", "end-1c", "displaylines")
-        actual_height = display_lines[0] if display_lines else int(self.text_widget.index("end-1c").split(".")[0])
+        actual_height = display_lines[0] + 1 if display_lines else int(self.text_widget.index("end-1c").split(".")[0])
 
         # Buffer 1: Headers (14pt) take more pixel height than default 10pt lines
         header_count = sum(1 for line in lines if line.startswith("#"))
         
         # Buffer 2: Add +1 line padding for multi-line wrapped text or code blocks
-        extra_buffer = header_count + (1 if actual_height > 1 or "```" in self.text else 0)
+        extra_buffer = header_count + (1 if actual_height > 2 or "```" in self.text else 0)
 
         self.text_widget.config(height=max(actual_height + extra_buffer, 1))
 
