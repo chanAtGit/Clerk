@@ -2,19 +2,25 @@ import os
 import platform
 import subprocess
 import time
-import re
+import sys
 import tkinter as tk
 import threading
 from tkinter import scrolledtext, filedialog, ttk
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
+from huggingface_hub import login, logout
 
 from file_sort import AutoLabelClusters, MoveFiles, SemanticClustering, SortIntoFolders, print_groups, LLM_NAME
 from file_embeddings import embeddings_init, get_file_id, get_file_mean_embeddings
-from model_commons import models_init, unload_embedding_model
+from model_commons import unload_embedding_model
 from widgets import SortingJobWidget, ScrollableFrame, ChatWidget, TextBubble
 from chat_functions import get_chat_response, get_new_chat_title
 from database import chat_db, ChatDB, Inquiry
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
 
 class App:
 
@@ -24,7 +30,6 @@ class App:
         self.root.geometry("950x650")
 
         # Initalize models and embeddings
-        models_init()
         embeddings_init()
 
         # State Variables
@@ -44,6 +49,14 @@ class App:
         self.chat_inprogress_list = []
         # list of chat session id with its corresponding chat awaiting bot response 
 
+        ### Initialize Hugging Face login and paths. Models are loaded dynamically later. ###
+        os.makedirs("models", exist_ok=True)
+        self.huggingface_token: str = self.database.get_huggingface_token()
+        try:
+            login(token=self.huggingface_token)
+        except Exception as e:
+            print(f"Error encountered when logging into huggingface: {e}. Using offline mode.")
+
         # Settings / Options (Using Tkinter BooleanVars for clean binding)
         self.use_online_llm = tk.BooleanVar(value=False)
         self.singular_sorting = tk.BooleanVar(value=False)
@@ -58,13 +71,13 @@ class App:
 
         # Asset References (stored on self to prevent garbage collection)
         self.prev_icon = ImageTk.PhotoImage(
-            Image.open("assets/prev_icon.png").resize((15, 15))
+            Image.open(resource_path("assets/prev_icon.png")).resize((15, 15))
         )
         self.next_icon = ImageTk.PhotoImage(
-            Image.open("assets/next_icon.png").resize((15, 15))
+            Image.open(resource_path("assets/next_icon.png")).resize((15, 15))
         )
         self.reload_icon = ImageTk.PhotoImage(
-            Image.open("assets/reload_icon.png").resize((15, 15))
+            Image.open(resource_path("assets/reload_icon.png")).resize((15, 15))
         )
 
         # Build UI Sections
@@ -265,7 +278,7 @@ class App:
 
                 # Display loading message
                 tk.Label(self.chat_content.scrollable_frame, 
-                        text="Waiting for Clerkbot response...", 
+                        text="Waiting for ClerkBot response...", 
                         font=("Arial", 10),
                         fg="orange").pack(anchor='w',pady=5, padx=5)
 
@@ -351,20 +364,21 @@ class App:
                     self.chat_content.scroll_to_bottom()
 
         except Exception as e:
-            if self.current_chat_id == chat_id:
-                self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
-                TextBubble(
-                    parent=self.chat_content.scrollable_frame,
-                    text=f"An error occurred: {e}",
-                    from_user=False
-                )
-                self.chat_content.scroll_to_bottom()
+            # if self.current_chat_id == chat_id:
+            #     self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
+            #     TextBubble(
+            #         parent=self.chat_content.scrollable_frame,
+            #         text=f"An error occurred: {e}",
+            #         from_user=False
+            #     )
+            #     self.chat_content.scroll_to_bottom()
+            print(f"An error occurred while chatting: {e}")
         finally:
             # lift restriction on chat_input and input_btn
             if self.current_chat_id in self.chat_inprogress_list:
                 self.chat_input.config(state=tk.NORMAL)
                 self.input_btn.config(state=tk.NORMAL)
-                self.chat_inprogress_list.remove(chat_id)
+            self.chat_inprogress_list.remove(chat_id)
             temp_db.close()
             del temp_db
         
@@ -471,7 +485,7 @@ class App:
                 )  
             else:
                 tk.Label(self.chat_content.scrollable_frame, 
-                                        text="Waiting for Clerkbot response...", 
+                                        text="Waiting for ClerkBot response...", 
                                         font=("Arial", 10),
                                         fg="orange").pack(anchor='w',pady=5, padx=5)
         self.chat_content.scroll_to_bottom()
@@ -581,6 +595,40 @@ class App:
             self.sidebar_frame.place(x=-10, y=0, relheight=1.0, width=250)
             self.sidebar_frame.lift()
             self.sidebar_visible = True
+
+    def _build_settings_page(self, parent_container):
+        self.page3 = ttk.Frame(parent_container, relief="groove", padding=10)
+        self.page3.grid(row=0, column=0, sticky="nsew")
+
+        settings_label = tk.Label(
+            self.page3, text="Settings", font=("Arial", 16, "bold")
+        )
+        settings_label.pack(anchor="center", pady=(0, 10))
+
+        # --- Settings Options --- #
+        tk.Label(
+            self.page3, text="Hugging Face Token", font=("Arial", 11)
+        ).pack(anchor="w", pady=(0, 5))
+        token_entry = tk.Entry(self.page3, show="*", font=("Arial", 12))
+        token_entry.pack(anchor="w", fill=tk.X)
+        if self.huggingface_token:
+            token_entry.insert(0, self.huggingface_token)
+
+        def save_settings():
+            logout()
+            try:
+                login(token=token_entry.get())
+                self.database.update_huggingface_token(token_entry.get())
+            except Exception as e:
+                print(f"Error encountered while saving settings: {e}")
+
+        settings_save_btn = tk.Button(
+            self.page3, 
+            text="Save", 
+            font=("Arial", 11), 
+            command=save_settings,
+            cursor="hand2")
+        settings_save_btn.pack(anchor="center", pady=10)
             
     def _build_right_frame(self):
         # COMPONENT 2: RIGHT FRAME (STATUS, USER CONTROLS, FILE SORT AND CLERKBOT)
@@ -603,7 +651,12 @@ class App:
         btn_page2 = ttk.Button(
             nav_frame, text="ClerkBot", command=lambda: self.page2.tkraise(), cursor="hand2"
         )
-        btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        btn_page2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        btn_page3 = ttk.Button(
+            nav_frame, text="Settings", command=lambda: self.page3.tkraise(), cursor="hand2"
+        )
+        btn_page3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=0)
 
         # --- Pages Container ---
         pages_container = ttk.Frame(right_container)
@@ -614,8 +667,11 @@ class App:
         # --- Page 1: File Sort ---
         self._build_sorting_page(pages_container)
 
-        # --- Page 2: ClerkBot Barebones ---
+        # --- Page 2: ClerkBot Page ---
         self._build_clerkbot_page(pages_container)
+
+        # --- Page 3: Settings Page ---
+        self._build_settings_page(pages_container)
 
         self.page1.tkraise()
 
