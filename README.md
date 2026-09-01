@@ -22,3 +22,8 @@ This project is inspired by QiuYannnn's Local-File-Organizer - https://github.co
 pip install -r requirements.txt
 python main.py
 ```
+
+## How to build
+```
+pyinstaller --noconsole --onedir --add-data "assets;assets" --collect-all chromadb --collect-all sentence_transformers --hidden-import transformers.models.diffusion_gemma main.py
+```

@@ -5,7 +5,6 @@ import numpy as np
 import re
 import ollama
 from pathlib import Path
-from huggingface_hub import login
 # from transformers import AutoProcessor, AutoModelForMultimodalLM
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import AgglomerativeClustering

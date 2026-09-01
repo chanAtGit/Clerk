@@ -22,18 +22,6 @@ llm_active_count = 0
 def print_active_count():
     print(f"embedding use: {embedding_active_count}, llm use: {llm_active_count}")
 
-def models_init():
-    """Initialize Hugging Face login and paths. Models are loaded dynamically later."""
-    huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
-
-    if not huggingface_token:
-        raise ValueError("HUGGINGFACE_TOKEN environment variable is not set.")
-
-    try:
-        login(token=huggingface_token)
-    except Exception as e:
-        print(f"Error encountered when logging into huggingface: {e}. Using offline mode.")
-
 ## USEFUL HELPER FUNCTION
 def clear_vram():
     """Forces Python garbage collection and clears PyTorch CUDA cache."""

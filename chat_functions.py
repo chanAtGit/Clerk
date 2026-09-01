@@ -68,9 +68,9 @@ def get_chat_response(prompt: str, retrieved_context: list, history: list, dir_p
                 elif document == None:
                     # retrieved a file that cannot be text splitted (need to convert to image first)
                     os.makedirs(non_text_dir, exist_ok=True)
-                    file_images = convert_pdf_to_img(file_path)
-                    temp_image_name = f"{uuid.uuid4().hex}.png" # generate random file name
-                    full_temp_path = os.path.join(non_text_dir, temp_image_name)
+                    file_images: list = convert_pdf_to_img(file_path)
+                    temp_image_name: str = f"{uuid.uuid4().hex}.png" # generate random file name
+                    full_temp_path: str = os.path.join(non_text_dir, temp_image_name)
                     file_images[int(metadata["page"]) - 1].save(full_temp_path, "PNG") # save the image page
 
                     content_list.append({"type": "image", "image": full_temp_path})
@@ -139,8 +139,10 @@ def get_chat_response(prompt: str, retrieved_context: list, history: list, dir_p
 
         return response        
     except Exception as e:
-        print(f"An error occured while chatting with LLM: {e}")
-        raise ValueError(e)
+        error_msg: str = f"An error occured while chatting with LLM: {e}"
+        print(error_msg)
+        # raise ValueError(e)
+        return error_msg
     finally:
         if not online: unload_llm()
         if os.path.exists(non_text_dir):
