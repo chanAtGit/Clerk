@@ -45,7 +45,6 @@ def get_new_chat_title(first_question: str, new_title: list, creating_new_chat: 
 def get_chat_response(prompt: str, retrieved_context: list, history: list, dir_path: str, online: bool = False) -> str:
     '''Get chatbot message when using ClerkBot module'''
     try:
-        # TODO: Add more advanced features. This is just a placeholder function with no chat memory.
         content_list = []
         text_context = []
         img_context = []

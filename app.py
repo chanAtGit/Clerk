@@ -39,17 +39,18 @@ class App:
 
         # Thread Executor and Helpers
         self.executor = ThreadPoolExecutor(max_workers=5)
-        self.sorting_folders = []
+        self.sorting_folders: list = []
 
         # Database
-        self.database = chat_db 
+        self.database: ChatDB = chat_db 
         # They share the same memory address, so we can use the same instance of ChatDB across the app
-        self.chat_session_list = self.database.get_all_chatsessions() 
+        self.chat_session_list: list = self.database.get_all_chatsessions() 
         # chat session list contains tuples in the form of (chat_id, chat_name)
-        self.chat_inprogress_list = []
+        self.chat_inprogress_list: list = []
         # list of chat session id with its corresponding chat awaiting bot response 
 
         ### Initialize Hugging Face login and paths. Models are loaded dynamically later. ###
+        os.makedirs("data", exist_ok=True)
         os.makedirs("models", exist_ok=True)
         self.huggingface_token: str = self.database.get_huggingface_token()
         try:
@@ -339,19 +340,22 @@ class App:
 
             create_title_thread.join() # wait for create title thread to finish before continuing
 
-            # Update chat session's name if user input in a newly created chat
-            if creating_new_chat:
-                temp_db.update_chatsession_name_by_id(chat_id, new_title[0])
-                # update chat_session_list
-                for i, (chat_id_iter, _) in enumerate(self.chat_session_list):
-                    if chat_id_iter == chat_id:
+            for i, (chat_id_iter, _) in enumerate(self.chat_session_list):
+                if chat_id_iter == chat_id:
+                    if creating_new_chat:
+                        # Update chat session's name if user input in a newly created chat
+                        temp_db.update_chatsession_name_by_id(chat_id, new_title[0])
                         self.chat_session_list[i] = (chat_id, new_title[0])
-                        break
-                self._reload_chat_list(self.recent_chat_list.scrollable_frame)
+                    # Move the chat which has received the response to the top
+                    self.chat_session_list.insert(0, self.chat_session_list.pop(i))
+                    break
+
+            self._reload_chat_list(self.recent_chat_list.scrollable_frame)
 
             # Handle LLM response
             if bot_response:
                 temp_db.update_inquiry_response_by_id(new_inquiry_id, bot_response)
+
                 if self.current_chat_id == chat_id:
                     # Remove loading message
                     self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
@@ -364,15 +368,8 @@ class App:
                     self.chat_content.scroll_to_bottom()
 
         except Exception as e:
-            # if self.current_chat_id == chat_id:
-            #     self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
-            #     TextBubble(
-            #         parent=self.chat_content.scrollable_frame,
-            #         text=f"An error occurred: {e}",
-            #         from_user=False
-            #     )
-            #     self.chat_content.scroll_to_bottom()
             print(f"An error occurred while chatting: {e}")
+
         finally:
             # lift restriction on chat_input and input_btn
             if self.current_chat_id in self.chat_inprogress_list:
@@ -450,7 +447,7 @@ class App:
         if self.current_chat_id == chatsession_id:
             return
         
-        self.current_chat_id = chatsession_id
+        self.current_chat_id = chatsession_id # user is currently viewing this chat
         # clear chat window
         self.chat_content.clear_content()
 
@@ -463,8 +460,13 @@ class App:
         )
 
         prev_dir_name: str = None
-        for user_message, bot_message, dir_name in prev_convs:
+        for id, user_message, bot_message, dir_name in prev_convs:
             # Add Tracking message if user switched directory during conversation
+            if bot_message is None and chatsession_id not in self.chat_inprogress_list:
+                # save storage space by deleting inquiries with no replies
+                self.database.delete_inquiry_by_id(id)
+                continue
+
             if prev_dir_name != dir_name:
                 tk.Label(self.chat_content.scrollable_frame, 
                     text=f"== Tracking: {dir_name} ==", 
@@ -484,10 +486,12 @@ class App:
                     from_user = False
                 )  
             else:
-                tk.Label(self.chat_content.scrollable_frame, 
-                                        text="Waiting for ClerkBot response...", 
-                                        font=("Arial", 10),
-                                        fg="orange").pack(anchor='w',pady=5, padx=5)
+                tk.Label(
+                    self.chat_content.scrollable_frame, 
+                    text="Waiting for ClerkBot response...", 
+                    font=("Arial", 10),
+                    fg="orange").pack(anchor='w',pady=5, padx=5)
+
         self.chat_content.scroll_to_bottom()
 
         if chatsession_id in self.chat_inprogress_list:

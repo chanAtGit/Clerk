@@ -31,7 +31,7 @@ def embeddings_init():
         raise ValueError("POPPLER_PATH environment variable is not set.")
         # Create or load cache. Cap the cache at 1000 items, using the Least Recently Used (LRU) policy
     if cache is None:
-        cache = Cache('embedding-cache', limit=1000, evict='lru')
+        cache = Cache('data/embedding-cache', limit=1000, evict='lru')
 
 def get_file_id(file_path: str) -> int:
     # Fetch file system attributes

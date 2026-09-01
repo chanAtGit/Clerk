@@ -1,11 +1,9 @@
 .venv
 __pycache__
-embedding-cache
+data
 models
 tests
 poppler-26.02.0
-chatData.db
-clerk_vectordb
 build
 dist
 main.spec

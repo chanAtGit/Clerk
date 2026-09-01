@@ -18,7 +18,7 @@ class Inquiry:
 
 class ChatDB():
     def __init__(self):
-        self.con = sqlite3.connect("chatData.db")
+        self.con = sqlite3.connect("data/chatData.db")
         self.cur = self.con.cursor()
 
         self.cur.execute("PRAGMA foreign_keys = ON;")
@@ -59,7 +59,7 @@ class ChatDB():
         )
         self.con.commit()
 
-        self.chroma_client = chromadb.PersistentClient(path="clerk_vectordb")
+        self.chroma_client = chromadb.PersistentClient(path="data/clerk_vectordb")
         print("DB: Init complete.")
 
     ### SQLITE RELATIONAL DB METHODS ###
@@ -133,7 +133,7 @@ class ChatDB():
     def get_inquiries_from_session(self, chatSession_id: str) -> list:
         self.cur.execute(
             '''
-            SELECT prompt, response, dir_name FROM inquiries
+            SELECT inquiry_id, prompt, response, dir_name FROM inquiries
             WHERE chatSession_id = ?
             ORDER BY created_date ASC
             ''',
@@ -202,6 +202,17 @@ class ChatDB():
             (chatSession_id,)
         )
         print(f"DB: Deleted chat session with id {chatSession_id}")
+        self.con.commit()
+
+    def delete_inquiry_by_id(self, inquiry_id: str):
+        self.cur.execute(
+            '''
+            DELETE FROM inquiries
+            WHERE inquiry_id = ?
+            ''',
+            (inquiry_id,)
+        )
+        print(f"DB: Deleted inquiry with id {inquiry_id}")
         self.con.commit()
 
     ### VECTOR DB METHODS ###
