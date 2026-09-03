@@ -1,6 +1,11 @@
-import tkinter as tk
+import io
+import math
 import re
-from tkinter import ttk
+import tkinter as tk
+from tkinter import ttk, font as tkfont
+from PIL import Image, ImageTk
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 class ScrollableFrame(ttk.Frame):
     """A scrollable frame that can contain other widgets."""
@@ -158,12 +163,13 @@ class ChatWidget:
         chat_name_btn.bind("<Button-2>", show_context_menu)
 
 class TextBubble(ttk.Frame):
-    """A chat message bubble widget supporting markdown formatting, alignment, and auto-expanding multi-line text without scroll traps."""
+    """A chat message bubble widget supporting markdown formatting, LaTeX formulas, alignment, and auto-expanding multi-line text."""
 
     def __init__(self, parent, text: str, from_user: bool, **kwargs):
         super().__init__(parent, **kwargs)
         self.text = text
         self.from_user = from_user
+        self.image_refs = []  # Prevents garbage collection of rendered LaTeX images
 
         # Outer row frame expands horizontally to allow left/right alignment
         self.pack(fill=tk.X, padx=10, pady=5)
@@ -180,13 +186,15 @@ class TextBubble(ttk.Frame):
             bg_code = "#D1D1D6"       # Code background for AI
             align_side = tk.LEFT      # Pack to the left
 
+        self.fg_color = fg_color
+
         # Inner container frame for padding & background
         bubble_frame = tk.Frame(
             self, bg=bg_color, padx=12, pady=8, highlightthickness=0
         )
         bubble_frame.pack(side=align_side, anchor="e" if self.from_user else "w")
 
-        # Text widget for markdown rendering (takefocus=0 prevents widget focus trapping)
+        # Text widget for markdown rendering
         self.text_widget = tk.Text(
             bubble_frame,
             bg=bg_color,
@@ -208,8 +216,32 @@ class TextBubble(ttk.Frame):
         self._adjust_size()
         self._forward_scroll_events()
 
+    def _latex_to_photoimage(self, latex_str: str, fontsize: int = 11) -> ImageTk.PhotoImage:
+        """Renders a LaTeX math expression to a Tkinter PhotoImage using matplotlib."""
+        latex_str = latex_str.strip()
+        if not latex_str.startswith("$"):
+            latex_str = f"${latex_str}$"
+
+        fig = Figure(dpi=120)
+        fig.patch.set_alpha(0.0)
+        
+        # Render text with matplotlib mathtext
+        fig.text(0, 0, latex_str, fontsize=fontsize, color=self.fg_color)
+        
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.02, transparent=True)
+        buf.seek(0)
+        
+        img = Image.open(buf)
+        photo = ImageTk.PhotoImage(img)
+        self.image_refs.append(photo)  # Maintain reference
+        return photo
+
     def _render_markdown(self, bg_code: str, fg_code: str):
-        """Parses basic Markdown formatting and applies Tkinter text tags."""
+        """Parses Markdown and LaTeX formatting and inserts elements into Tkinter text."""
         font_family = "Arial"
         font_size = 10
 
@@ -261,18 +293,37 @@ class TextBubble(ttk.Frame):
                 self.text_widget.insert(tk.END, "  • ")
                 line = line.strip()[2:]
 
-            # Inline formatting (bold, italic, inline code)
+            # Inline formatting & LaTeX handling
             self._insert_inline_formatted(line + ("\n" if i < len(lines) - 1 else ""))
 
     def _insert_inline_formatted(self, line: str):
-        """Splits text on markdown tokens and inserts with appropriate tags."""
-        pattern = re.compile(r'(\*\*\*.*?\*\*\*|\*\*.*?\*\*|\*.*?\*|`.*?`)')
+        """Splits text on LaTeX math tokens and markdown tokens to insert formatted inline objects."""
+        # Matches display math $$...$$, inline math $...$, bold/italic, and inline code `...`
+        pattern = re.compile(r'(\$\$.*?\$\$|\$.*?\$|\*\*\*.*?\*\*\*|\*\*.*?\*\*|\*.*?\*|`.*?`)')
         parts = pattern.split(line)
 
         for part in parts:
             if not part:
                 continue
-            if part.startswith("***") and part.endswith("***") and len(part) >= 6:
+
+            # Display Math: $$...$$
+            if part.startswith("$$") and part.endswith("$$") and len(part) >= 4:
+                try:
+                    photo = self._latex_to_photoimage(part[2:-2], fontsize=12)
+                    self.text_widget.image_create(tk.END, image=photo)
+                except Exception:
+                    self.text_widget.insert(tk.END, part)
+
+            # Inline Math: $...$
+            elif part.startswith("$") and part.endswith("$") and len(part) >= 2:
+                try:
+                    photo = self._latex_to_photoimage(part[1:-1], fontsize=10)
+                    self.text_widget.image_create(tk.END, image=photo)
+                except Exception:
+                    self.text_widget.insert(tk.END, part)
+
+            # Markdown Inline Formats
+            elif part.startswith("***") and part.endswith("***") and len(part) >= 6:
                 self.text_widget.insert(tk.END, part[3:-3], "bold_italic")
             elif part.startswith("**") and part.endswith("**") and len(part) >= 4:
                 self.text_widget.insert(tk.END, part[2:-2], "bold")
@@ -289,29 +340,25 @@ class TextBubble(ttk.Frame):
         lines = self.text.split("\n")
         max_line_len = max((len(l) for l in lines), default=0)
 
-        # Cap max bubble width to 45 chars
         calc_width = min(max(max_line_len + 2, 12), 45)
         self.text_widget.config(width=calc_width)
 
-        # Force geometry calculation
         self.update_idletasks()
 
-        # Count visual display lines
         display_lines = self.text_widget.count("1.0", "end-1c", "displaylines")
         actual_height = display_lines[0] + 1 if display_lines else int(self.text_widget.index("end-1c").split(".")[0])
 
-        # Buffer 1: Headers (14pt) take more pixel height than default 10pt lines
         header_count = sum(1 for line in lines if line.startswith("#"))
-        
-        # Buffer 2: Add +1 line padding for multi-line wrapped text or code blocks
-        extra_buffer = header_count + (1 if actual_height > 2 or "```" in self.text else 0)
+        # Add 1 height buffer for every LaTeX image stored in self.image_refs
+        latex_buffer = len(self.image_refs)
+
+        extra_buffer = header_count + latex_buffer + (1 if actual_height > 2 or "```" in self.text or "$" in self.text else 0)
 
         self.text_widget.config(height=max(actual_height + extra_buffer, 1))
 
     def _forward_scroll_events(self):
         """Passes mouse wheel events to the parent ScrollableFrame canvas."""
         def _on_mousewheel(event):
-            # Locate parent ScrollableFrame's canvas
             widget = self.master
             while widget and not isinstance(widget, ScrollableFrame):
                 widget = widget.master
