@@ -258,9 +258,3 @@ class App:
 
     def run(self):
         self.root.mainloop()
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = App(root)
-    app.run()

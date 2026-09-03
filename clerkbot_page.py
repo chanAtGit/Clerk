@@ -206,10 +206,10 @@ class ClerkBotPage(ttk.Frame):
                 self.chat_input.config(state=tk.DISABLED)
                 self.input_btn.config(state=tk.DISABLED)
 
-            history = temp_db.get_inquiries_for_llm_history(chat_id, tar_dir)
+            history: list = temp_db.get_inquiries_for_llm_history(chat_id, tar_dir)
 
             new_inquiry = Inquiry(user_message, bot_response, chat_id, tar_dir)
-            new_inquiry_id = temp_db.create_inquiry(new_inquiry)
+            new_inquiry_id: str = temp_db.create_inquiry(new_inquiry)
 
             get_file_mean_embeddings(self.app.selected_path)
 
@@ -220,7 +220,7 @@ class ClerkBotPage(ttk.Frame):
 
             unload_embedding_model()
 
-            new_title = []
+            new_title: list = []
             create_title_thread = threading.Thread(
                 target=get_new_chat_title, 
                 args=(user_message, new_title, 
@@ -290,7 +290,7 @@ class ClerkBotPage(ttk.Frame):
         self.app.current_chat_id = chatsession_id
         self.chat_content.clear_content()
 
-        prev_convs = self.app.database.get_inquiries_from_session(chatsession_id)
+        prev_convs: list = self.app.database.get_inquiries_from_session(chatsession_id)
         TextBubble(
             parent=self.chat_content.scrollable_frame,
             text="Ask me anything about what's in the folder!",
@@ -309,7 +309,7 @@ class ClerkBotPage(ttk.Frame):
                     font=("Arial", 10), 
                     fg="green").pack(anchor='center', pady=5)
                 prev_dir_name = dir_name
-            
+
             TextBubble(
                 parent=self.chat_content.scrollable_frame,
                 text=user_message,
