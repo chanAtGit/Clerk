@@ -262,7 +262,15 @@ class ClerkBotPage(ttk.Frame):
                     self.chat_content.scroll_to_bottom()
 
         except Exception as e:
-            print(f"An error occurred while chatting: {e}")
+            error_msg: str = f"An error occurred while chatting: {e}"
+            if self.app.current_chat_id == chat_id:
+                self.chat_content.scrollable_frame.winfo_children()[-1].destroy()
+                TextBubble(
+                    parent=self.chat_content.scrollable_frame,
+                    text=error_msg,
+                    from_user=False
+                )
+            self.chat_content.scroll_to_bottom()
 
         finally:
             if self.app.current_chat_id in self.app.chat_inprogress_list:

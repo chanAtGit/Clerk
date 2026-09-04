@@ -26,9 +26,9 @@ def optimal_clustering(embeddings:list, recursive:bool=True, status_callback = N
     data = pca.fit_transform(np.array(embeddings))
     cluster_values = np.arange(1, int(data.shape[0]))
     
-    best_clusters = None
-    best_score = -1
-    best_labels = None
+    best_clusters: int = None
+    best_score: float = -1
+    best_labels: list = None
 
     for cluster in cluster_values:
         model = AgglomerativeClustering(n_clusters=cluster, metric="cosine", linkage='average')
@@ -111,6 +111,8 @@ def insert_groups_dict(groups: dict, lab: str, file_name: str):
 def SemanticClustering(dir_path: str, recursive:bool=True, status_callback=None, progress_callback=None, check_cancel=None) -> dict:
     '''Group files into semantic clusters using VL embedding model and hierarchical clustering'''
     if check_cancel and check_cancel(): raise InterruptedError()
+
+    embedding_model_used: bool = False
     
     try:
         file_embeddings_dict, embedding_model_used = get_file_mean_embeddings(dir_path, status_callback, progress_callback, check_cancel)

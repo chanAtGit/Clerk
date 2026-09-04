@@ -25,5 +25,5 @@ python main.py
 
 ## How to build
 ```
-pyinstaller --noconsole --onedir --add-data "assets;assets" --collect-all chromadb --collect-all sentence_transformers --hidden-import transformers.models.diffusion_gemma main.py
+pyinstaller --noconsole --onedir --add-data "assets;assets" --collect-all chromadb --collect-all sentence_transformers --collect-all matplotlib --hidden-import transformers.models.diffusion_gemma --name="Clerk" --icon="assets/app_icon.ico" main.py
 ```

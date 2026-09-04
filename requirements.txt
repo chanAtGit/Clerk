@@ -9,6 +9,7 @@ langchain
 langchain_community
 langchain-text-splitters
 unstructured
+matplotlib
 docx2pdf
 pdf2image # need Poppler
 Pillow

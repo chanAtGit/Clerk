@@ -6,4 +6,4 @@ tests
 poppler-26.02.0
 build
 dist
-main.spec
+Clerk.spec
